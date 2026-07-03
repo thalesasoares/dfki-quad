@@ -1,0 +1,38 @@
+---
+description: High-level overview of the dfki-quad repository structure and purpose
+alwaysApply: true
+---
+
+# dfki-quad Repository Overview
+
+ROS 2 (Humble) quadruped locomotion stack for **Unitree Go2** and the **DFKI ULab** robot. Combines MPC, WBC, gait sequencing, Drake simulation, and Invariant EKF state estimation. All runs inside Docker.
+
+## Workspace Layout
+
+```
+dfki-quad/
+├── run_docker.sh, build_new_image.sh, new_docker_shell.sh  # Docker lifecycle
+├── docker/Dockerfile                                        # Container image
+└── ws/src/
+    ├── interfaces/       # Custom ROS msgs/srvs — shared contract for all packages
+    ├── common/           # Robot models (Pinocchio/Drake), URDF, shared params
+    ├── controllers/      # MIT controller: gait sequencer → MPC → WBC
+    ├── drivers/          # leg_driver (IK+safety), motor drivers (Unitree/mjbots)
+    ├── simulator/        # Drake physics sim + Meshcat visualizer
+    ├── state_estimation/ # Invariant EKF (used on real hardware)
+    └── solver_experiments/ # ICRA25 QP solver benchmarking scripts
+```
+
+## Key Interfaces (ws/src/interfaces/)
+
+All cross-package communication goes through custom types: `QuadState`, `QuadControlTarget`, `LegCmd`, `JointCmd`, `GaitSequence`, `WBCTarget`, `MPCDiagnostics`, `ResetSimulation`.
+
+## Robot Selection
+
+Robot is selected at **build time**: `-DROBOT_NAME=go2` or `-DROBOT_NAME=ulab`.
+At **launch time**: `sim:=go2`, `sim:=ulab`, `real:=go2`, or `real:=ulab`.
+
+## Research Tags
+
+- `ICRA25` — QP solver comparison experiments
+- `IROS25` — Online model adaptation (Kalman filter)

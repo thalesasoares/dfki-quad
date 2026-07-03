@@ -1,0 +1,40 @@
+---
+description: Robot variant differences between Unitree Go2 and DFKI ULab quadruped
+globs: ws/src/**/*.cpp,ws/src/**/*.hpp,ws/src/**/*.yaml,ws/src/**/*.launch.py
+alwaysApply: false
+---
+
+# Robot Variants: Go2 vs ULab
+
+## Comparison
+
+| Aspect | **Unitree Go2** | **DFKI ULab** |
+|--------|-----------------|----------------|
+| URDF | `model/urdf/go2/urdf/go2_description.urdf` | `model/urdf/quad.urdf` |
+| Motor driver node | `unitree_ros2_motor_driver` | `mjbots_ros2_motor_driver` (runs on robot's Raspberry Pi) |
+| DDS middleware | CycloneDDS | FastRTPS |
+| ROS domain ID | 0 | 100 |
+| Sourcing alias | `sg` | `sr` |
+| Network | Ethernet to robot | SSH to `10.0.0.20` |
+| Build flag | `-DROBOT_NAME=go2` | `-DROBOT_NAME=ulab` |
+| Launch arg | `sim:=go2` / `real:=go2` | `sim:=ulab` / `real:=ulab` |
+
+## Config Files (in each package)
+
+Each robot has its own YAML config variants, e.g.:
+- `mit_controller_sim_go2.yaml` vs `mit_controller_sim_ulab.yaml`
+- `simulator_params_go2.yaml` vs `simulator_params_ulab.yaml`
+- `common_config_go2.yaml` vs `common_config_ulab.yaml`
+
+## Hardware Bring-up (Real Robot)
+
+For real hardware, add to the simulation launch sequence:
+1. Motor driver (robot-specific)
+2. `ros2 launch state_estimation state_estimation.launch.py real:=<robot>`
+
+Vicon motion capture is optional; enable with `WITH_VICON` build flag.
+
+## MPC Solver Options (per launch)
+
+Override at launch time: `mpc_solver:=hpipm|osqp|qpoases` and condensing levels.
+Defaults are in the robot-specific controller config YAML.

@@ -1,0 +1,47 @@
+---
+description: Docker workflow, build commands, and development environment setup
+globs: docker/**,run_docker.sh,build_new_image.sh,new_docker_shell.sh,ws/**
+alwaysApply: false
+---
+
+# Build & Docker Workflow
+
+## Docker Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `build_new_image.sh` | Build `dfki_quad:latest` image (removes old containers first) |
+| `run_docker.sh` | Start or reattach container; mounts `ws/src`, `ws/data`, X11, joystick, serial |
+| `new_docker_shell.sh` | Open an extra shell in the running container |
+| `reset_docker_container.sh` | Reset container state |
+
+`ws/src/` and `ws/data/` are **volume-mounted** into the container at `/root/ros2_ws/src` and `/root/ros2_ws/data`. Edit source on the host; build inside the container.
+
+## Build Commands (inside container)
+
+```bash
+# Go2 build
+colcon build --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DROBOT_NAME=go2
+source install/setup.bash
+source ~/setup_ulab_workspace.bash   # simulation DDS (FastRTPS)
+
+# ULab build
+colcon build --symlink-install --cmake-args -DROBOT_NAME=ulab
+```
+
+**Container shortcuts:**
+- `cbg` — build for Go2
+- `cbr` — build for ULab
+- `sg`  — source Go2 environment (CycloneDDS, domain 0)
+- `sr`  — source sim environment (FastRTPS)
+
+## Key Dependencies (from Docker image)
+
+Drake, acados, ARC-OPT WBC, Pinocchio, Invariant EKF, Proxsuite, Unitree SDK2, CycloneDDS, Matplot++.
+See `DEPENDENCIES.md` and `docker/Dockerfile` for full list and versions.
+
+## Common Build Notes
+
+- Always build inside the container, not on the host.
+- `--symlink-install` is important for Python scripts to be picked up without rebuilding.
+- After any interface change (`interfaces/` package), rebuild all dependent packages.

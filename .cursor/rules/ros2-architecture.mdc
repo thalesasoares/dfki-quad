@@ -1,0 +1,59 @@
+---
+description: Control pipeline, ROS 2 topic graph, and package responsibilities
+globs: ws/src/**/*.cpp,ws/src/**/*.hpp,ws/src/**/*.py,ws/src/**/*.yaml,ws/src/**/*.launch.py
+alwaysApply: false
+---
+
+# ROS 2 Architecture & Control Pipeline
+
+## Hierarchical Control Flow
+
+```
+QuadControlTarget (velocity, height, yaw)
+       ↓  [/quad_control_target]
+Gait Sequencer  (SimpleGait / AdaptiveGait / BioGait + RaibertFootStepPlanner)
+       ↓  GaitSequence
+MPC (acados) — convex GRF optimization over horizon
+       ↓  WrenchSequence
+SwingLegController
+       ↓
+WBC (ARC-OPT / TSID) — whole-body QP
+       ↓  [/leg_cmd or /leg_joint_cmd]
+leg_driver — IK, Jacobian, safety enforcement
+       ↓  [/joint_cmd]
+Simulator (Drake) OR Motor Driver (Unitree/mjbots)
+       ↓  [/joint_states, /imu_measurement, /contact_state]
+state_estimation (Invariant EKF) → [/quad_state]
+```
+
+## Key ROS Topics
+
+| Topic | Type | Direction |
+|-------|------|-----------|
+| `/quad_control_target` | `QuadControlTarget` | joystick → controller |
+| `/quad_state` | `QuadState` | state_est → controller |
+| `/leg_cmd` | `LegCmd` | controller → leg_driver |
+| `/joint_cmd` | `JointCmd` | leg_driver → motor/sim |
+| `/joint_states` | `JointState` | motor/sim → state_est |
+| `/gait_state` | `GaitState` | controller → state_est |
+| `/clock` | `Clock` | simulator (use `use_sim_time:=true`) |
+
+## Package Responsibilities
+
+- **`controllers/`**: `mit_controller_node.cpp` is the main node. MPC in `src/mit_controller/mpc.cpp`. WBC in `wbc_arc_opt.cpp`. Configs in `config/mit_controller_sim_go2.yaml` etc.
+- **`drivers/`**: `leg_driver.cpp` handles IK and safety. Motor drivers are robot-specific.
+- **`simulator/`**: `drake_simulator.cpp` publishes `/clock`. Visualizer at `localhost:7000`.
+- **`state_estimation/`**: Only needed on real hardware; Drake provides ground-truth state in sim.
+
+## Simulation Launch Order
+
+```bash
+ros2 launch simulator simulator.launch.py sim:=go2
+ros2 launch drivers leg_driver_launch.py sim:=go2
+ros2 launch controllers quad_stand_up.launch.py sim:=go2
+ros2 launch controllers mit_controller.launch.py sim:=go2
+```
+
+## Joint Naming Convention
+
+12 joints: `{fl,fr,bl,br}_{abad,shoulder,knee}` (4 legs × 3 DOF).
