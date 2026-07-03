@@ -1,0 +1,5 @@
+services:
+  dfki_quad:
+    volumes:
+      - /media/external-drive:/media/external-drive
+      - /usr/bin/tegrastats:/usr/bin/tegrastats

@@ -1,0 +1,4 @@
+services:
+  dfki_quad:
+    volumes:
+      - /sys/class/powercap:/sys/class/powercap
