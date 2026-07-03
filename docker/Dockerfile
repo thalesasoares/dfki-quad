@@ -13,7 +13,7 @@ RUN apt-get install -y \
     python3-pip \
     python-is-python3 \
     ros-humble-rosbridge-server \
-    ros-humble-joy-linux \
+    ros-humble-joy \
     ros-humble-teleop-tools \
     nano \
     vim \

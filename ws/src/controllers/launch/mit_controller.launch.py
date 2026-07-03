@@ -150,9 +150,9 @@ def generate_launch_description():
         sim))  # This variable is during launch replaced with the respective LaunchArgument declared by DeclareLaunchArgument
 
     joy = Node(
-        package="joy_linux",
-        name="joy_linux_node",
-        executable="joy_linux_node",
+        package="joy",
+        name="joy_node",
+        executable="joy_node",
         parameters=[{"use_sim_time": use_sim_time}]
     )
 
