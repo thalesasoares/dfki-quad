@@ -47,6 +47,12 @@ install/
 log/
 build/
 
+# Colcon workspace artifacts (mounted into Docker container)
+ws/build/
+ws/install/
+ws/log/
+ws/data/
+
 # Ignore generated docs
 *.dox
 *.wikidoc
