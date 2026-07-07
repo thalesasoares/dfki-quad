@@ -3,13 +3,13 @@
 <img src="header.JPG" alt="both quadrupeds controlled by this software stack on top of VULCANO" width="80%"/>
 </p>
 
-This repo contains the quadruped controller used at DFKI's underactuated lab.
+This repo contains the *ADAPTED* quadruped controller used at DFKI's underactuated lab.
 It mainly contains a *simulation*, dynamic walking controller using *MPC*, *WBC* and different *Gait Sequencers* and hardware *drivers* to be used with different quadrupeds.
 - To install the whole software stack please refer to [Installation](#installation)
 - To run the simulated experiments from our paper [**Benchmarking Different QP Formulations and Solvers for Dynamic Quadrupedal Walking**](https://arxiv.org/abs/2502.01329) please refer to section [Run the solver comparison experiments](#run-the-solver-comparison-experiments)
 - To run the model-adaptation from out paper **Adaptive Model-Based Control of Quadrupeds via Online System
 Identification using Kalman Filter** (under review) please refer to section [Run adaptive MPC experiments](#run-adaptive-mpc-experiments)
-- To run the controller in simulation or on your own hardware *(EXPERIMENTAL)*, pleae refer to [Run the software stack](#run-the-software-stack)
+- To run the controller in simulation or on your own hardware *(EXPERIMENTAL)*, please refer to [Run the software stack](#run-the-software-stack) — start with the [Quick start (simulation)](#quick-start-simulation) section for copy-paste commands.
 
 ## Authors
 - [Shubham Vyas](https://robotik.dfki-bremen.de/de/ueber-uns/mitarbeiter/person/shvy01) (Project Leader)
@@ -83,11 +83,12 @@ This will launch a new shell for the already running container.
     ./new_docker_shell.sh
     ```
 
-* Connected gampads will automatically be accessible from within the container.
-If not, simply rerun the `run_docker.sh` script.
-Currently, most scripts support Logitech F310 type gamepads. For other gamepads (e.g. xbox360) axes mapping might be different.
+* Containers are managed via **Docker Compose** (`docker-compose.yml`). The `run_docker.sh` script starts or reattaches the `dfki_quad` container and automatically creates the local `ws/build`, `ws/install`, `ws/log`, and `ws/data` directories. Build artifacts and logs persist on the host between container restarts.
+* Architecture-specific settings (e.g. power monitoring, external storage on Jetson) are applied automatically via `docker-compose.aarch64.yml` or `docker-compose.x86_64.yml`.
 
-    > **Note:** If you want to create a new container (e.g. for rebuiling the software stack), you can use the `reset_docker_container.sh` script. This will delete all current containers with the "dfki_quad" label. After that, you can proceed with the `run_docker.sh` script, which will create a new container for you.
+    > **Note:** If you want to create a new container (e.g. after changing Docker settings or rebuilding the image), use the `reset_docker_container.sh` script. This removes all containers with the "dfki_quad" label. Then run `./run_docker.sh` again to create a fresh container.
+
+* **Gamepad:** USB gamepads are passed into the container via `/dev/input`. Connect the gamepad **before** starting the container, or restart the container after plugging it in. See [Gamepad control](#gamepad-control) for supported devices and button mappings.
 
 **3. Building the software stack**
 
@@ -109,6 +110,14 @@ Currently, most scripts support Logitech F310 type gamepads. For other gamepads 
      ```
     > **Note:** The unitree software stack requires cyclone dds, which will be setup by the last command. This means that your network interface need to be configured in this script.
 If you just want to use the simulation, independent from the build command, please just source `setup_ulab_workspace.bash`.
+
+    **Container shortcuts** (defined in the Docker image):
+    | Shortcut | Command |
+    |----------|---------|
+    | `cbg` | Build for Go2 |
+    | `cbr` | Build for ULab |
+    | `sg` | Source Go2 real-hardware environment (CycloneDDS) |
+    | `sr` | Source simulation environment (FastRTPS) |
 
 ## Run the solver comparison experiments
 If you want to repoduce the results from __Benchmarking Different QP Formulations and Solvers for Dynamic
@@ -228,7 +237,106 @@ Following components have to be launched to run the software stack:
 - *When on the real system:* State estimation
 
 Please find instructions for all components below.
-> **Note:** Almost all commands in this section need to run in seperate terminals.
+> **Note:** Almost all commands in this section need to run in separate terminals.
+
+### Quick start (simulation)
+
+Use these commands to get a simulated robot walking. Replace `go2` with `ulab` for the DFKI quadruped, and use `cbr` instead of `cbg` when building for ULab.
+
+**On the host (once):**
+```bash
+./build_new_image.sh   # first time, or after pulling dev-branch changes
+./run_docker.sh
+```
+
+**Inside the container — build (once per robot variant):**
+```bash
+cbg                    # build for Go2  (use cbr for ULab)
+sr                     # source sim environment (FastRTPS)
+```
+
+**Terminal 1 — simulation:**
+```bash
+sr
+ros2 launch simulator simulator.launch.py sim:=go2
+```
+
+**Terminal 2 — leg driver** (open a new host shell with `./new_docker_shell.sh`, then):
+```bash
+sr
+ros2 launch drivers leg_driver_launch.py sim:=go2
+```
+
+**Terminal 3 — stand up:**
+```bash
+sr
+ros2 launch controllers quad_stand_up.launch.py sim:=go2
+```
+
+**Terminal 4 — controller and gamepad:**
+```bash
+sr
+ros2 launch controllers mit_controller.launch.py sim:=go2
+```
+
+Connect a USB gamepad before starting the controller. Use the left stick to walk and the face buttons to switch gaits (see [Gamepad control](#gamepad-control)).
+
+### Gamepad control
+
+The controller launch file starts the standard ROS 2 `joy` node (`ros-humble-joy`) together with a `joy_to_target` node that converts joystick input into velocity and gait commands.
+
+**Setup**
+
+1. Connect a USB gamepad to the host machine.
+2. Start (or restart) the Docker container with `./run_docker.sh` so `/dev/input` is available inside the container.
+3. Launch the controller as shown above — the gamepad driver starts automatically.
+4. Verify the gamepad is detected:
+   ```bash
+   ros2 topic echo /joy
+   ```
+   Move a stick; you should see axis values change.
+
+> **Note:** If you upgraded from the `main` branch, rebuild the Docker image (`./build_new_image.sh`) so the container includes `ros-humble-joy` instead of the former `joy_linux` package.
+
+**Supported gamepads**
+
+| Gamepad | Notes |
+|---------|-------|
+| Logitech F310 (Mode **X**) | Recommended. Flip the switch on the back to **X** mode. |
+| Logitech F310 (Mode **D**) | Also supported; fewer axes are exposed. |
+| Xbox 360 controller | Supported; button mapping may differ slightly. |
+| Unitree Go2 wireless controller | Used automatically on real Go2 hardware via the `/wirelesscontroller` topic. |
+
+**Movement**
+
+| Input | Action |
+|-------|--------|
+| Left stick ↑/↓ | Forward / backward velocity |
+| Left stick ←/→ | Lateral velocity |
+| Right stick ←/→ | Yaw rate |
+| Right stick ↑/↓ | Body pitch |
+| RB + right stick ←/→ | Body roll |
+| D-pad ↑/↓ | Raise / lower body height |
+| LT / RT (triggers) | Reduce / increase velocity scaling |
+| Press left or right stick (L / R) | **Emergency damping** — robot goes limp |
+
+**Gaits and sequencer**
+
+| Input | Action |
+|-------|--------|
+| A | Stand (all feet in contact) |
+| X | Walking trot |
+| B | Static walk |
+| Y | Switch to **Adaptive** gait sequencer |
+| LB + Y | Switch to **Simple** gait sequencer |
+| LB + X | Pace |
+| LB + B | Bound |
+| LB + A | Pronk |
+| D-pad ←/→ (or RT + D-pad ↑/↓) | Decrease / increase swing-leg height |
+| Start | Reset state-estimation covariances (real hardware) |
+
+On the real Go2, the built-in wireless controller provides the same mappings. When both a USB gamepad and the wireless controller are active, whichever was used most recently takes priority.
+
 ### Robot selection
 * When running a launch file, the used robot and whether it is on the real system or in simulation has to be specified.
 For this, it is required to set either the parameter `sim` or the parameter `real` to `ulab` for the dfki dog or to `go2` for the unitree.
@@ -383,7 +491,7 @@ which will advance the simulation by the amount of seconds specified in the requ
     # select robot with sim:=ulab, sim:=go2, real:=ulab or real:=go2
     ros2 launch controllers quad_stand_up.launch.py sim:=go2
     ```
-* Then launch the controller (it will also launch the gamepad driver)
+* Then launch the controller (starts the gamepad driver automatically — see [Gamepad control](#gamepad-control))
     ```
     # select robot with sim:=ulab, sim:=go2, real:=ulab or real:=go2
     ros2 launch controllers mit_controller.launch.py sim:=go2
