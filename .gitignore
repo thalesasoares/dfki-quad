@@ -123,3 +123,5 @@ ws/force_contact.xml
 
 ws/src/COMPARISON_DATA/**
 ws/src/mosek/mosek.lic
+
+/doc/PRFAQ.md
