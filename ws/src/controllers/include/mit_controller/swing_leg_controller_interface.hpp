@@ -27,14 +27,50 @@ class SwingLegControllerInterface {
   };
 
  protected:
-  SwingLegControllerInterface() = default;
-
+  SwingLegControllerInterface() = default;  // protected, as there cant be any Object from an Interface
  public:
+  /**
+   * Provides the newest gait sequence. Only called when the gait sequencer produced a new one,
+   * i.e. at most at MPC rate (100 Hz), not at SLC rate.
+   *
+   * @param gs the new gait sequence
+   */
   virtual void UpdateGaitSequence(const GaitSequence &gs) = 0;
+  /**
+   * Provides the newest state. Called every SLC cycle (500 Hz) and additionally from the MPC
+   * loop (100 Hz).
+   *
+   * @param state the new state
+   */
   virtual void UpdateState(const StateInterface &state) = 0;
+  /**
+   * Provides an updated model. Only called when the model adaptation changed the model.
+   *
+   * @param model the new model
+   */
   virtual void UpdateModel(const ModelInterface &model) = 0;
+  /**
+   * Returns the swing foot targets. Called every SLC cycle (500 Hz), after UpdateState.
+   *
+   * @param feet_targets out: position, velocity and acceleration target per leg
+   */
   virtual void GetFeetTargets(FeetTargets &feet_targets) = 0;
+  /**
+   * Returns the swing progress per leg. Called every SLC cycle (500 Hz), after GetFeetTargets.
+   *
+   * @param progress out: swing progress in [0, 1] per leg
+   * @param swing_states out: LegState per leg
+   */
   virtual void GetProgress(std::array<double, N_LEGS> &progress, std::array<LegState, N_LEGS> &swing_states) = 0;
+  /**
+   * Returns the current swing trajectory endpoints, for visualisation only. Called from the
+   * control loop, so possibly concurrently with the other methods (see doc/modularity).
+   *
+   * @param start_pos out: swing start position per leg
+   * @param end_pos out: swing end position per leg
+   */
   virtual void GetCurrentTrajs(std::array<Eigen::Vector3d, N_LEGS> &start_pos,
                                std::array<Eigen::Vector3d, N_LEGS> &end_pos) = 0;
+
+  virtual ~SwingLegControllerInterface() = default;
 };
