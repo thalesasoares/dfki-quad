@@ -4,8 +4,10 @@
 data types exported in M1.3 (issue #3); `ContactLogicInterface` specified in M1.4 (issue #4, §4.6 —
 header stub, not yet wired) ·
 **Applies to:** `ws/src/controllers` ·
-**Companion document:** [`pipeline_types.md`](pipeline_types.md) — the data the methods below
-exchange, and the include path plugins compile against
+**Companion documents:** [`pipeline_types.md`](pipeline_types.md) — the data the methods below
+exchange, and the include path plugins compile against ·
+[`plugin_lifecycle.md`](plugin_lifecycle.md) — how a stage is created and initialised once loaded
+via pluginlib (specified ahead of M2.2)
 
 This document is the reference contract for the five control-pipeline stages that
 `mit_controller_node` hosts. It records, for each stage, the methods an implementation **must**
@@ -104,6 +106,10 @@ timers are created lazily inside the first `MPCLoopCallback`**
    they must tolerate a default-constructed `QuadState` on their first cycles.
 3. Constructors receive `std::unique_ptr<ModelInterface>` and `std::unique_ptr<StateInterface>`
    clones and take ownership of them. Every stage therefore needs a working destructor — see G4.
+   Under the plugin host (M2) this constructor injection becomes two-phase: the loader
+   default-constructs the plugin and the host passes the same clones (and the parameters) through
+   `StagePlugin::Init` — see [`plugin_lifecycle.md`](plugin_lifecycle.md). The guarantee is
+   unchanged: the clones are valid when the stage receives them.
 
 ### General call-order rule
 

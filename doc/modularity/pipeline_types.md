@@ -188,7 +188,10 @@ aligned `new` handles Eigen's over-aligned fixed-size types, so no
   (issue #6) together with the pluginlib base. They are not exportable as-is:
   `mpc_interface.hpp` and `gait_sequencer_interface.hpp` include `potato_sim/potato_model.hpp`, a
   node-internal header, which that PR has to resolve. `SolverInformation`, `WBCReturn` and
-  `joint_commands.hpp` travel with their interfaces.
+  `joint_commands.hpp` travel with their interfaces. The pluginlib base itself,
+  `mit_controller/stage_plugin.hpp` (specified ahead of M2.2 — see
+  [`plugin_lifecycle.md`](plugin_lifecycle.md)), is already self-contained and joins the surface in
+  the same PR.
 
 ## 7. Known follow-ups
 

@@ -23,7 +23,9 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "common/model_interface.hpp"
 #include "common/state_interface.hpp"
@@ -38,6 +40,7 @@
 #include "mit_controller/mpc_interface.hpp"
 #include "mit_controller/mpc_prediction.hpp"
 #include "mit_controller/pipeline_constants.hpp"
+#include "mit_controller/stage_plugin.hpp"
 #include "mit_controller/swing_leg_controller_interface.hpp"
 #include "mit_controller/target.hpp"
 #include "mit_controller/wbc_interface.hpp"
@@ -211,6 +214,41 @@ class FakeGait final : public GaitInterface {
     (void)leg;
     return 0.0;
   }
+};
+
+// --- Plugin lifecycle layer (plugin_lifecycle.md) ----------------------------
+// A stage as the M2 loader will see it: default-constructed, then handed its
+// model/state clones and parameters through Init. One representative
+// instantiation guards the shape of the whole `StagePlugin<Interface>`
+// template. The fake takes real ownership of the clones and requires one key,
+// exercising the StageInitError path the M2.2 loader helper must translate
+// into the fail-fast bring-up error.
+class FakePluginGaitSequencer final : public StagePlugin<GaitSequencerInterface> {
+ public:
+  static constexpr const char* kRequiredKey = "contract_test.required";
+
+  void Init(StageInit init) override {
+    init.Require(kRequiredKey);
+    model_ = std::move(init.model);
+    state_ = std::move(init.state);
+  }
+  bool Initialized() const { return model_ != nullptr && state_ != nullptr; }
+
+  void GetGaitSequence(GaitSequence& gait_sequence) override { gait_sequence = GaitSequence{}; }
+  void UpdateState(const StateInterface& quad_state) override { (void)quad_state; }
+  void UpdateModel(const ModelInterface& quad_model) override { (void)quad_model; }
+  void UpdateTarget(const Target& new_target) override { (void)new_target; }
+  void GetGaitState(interfaces::msg::GaitState& state) override { state = interfaces::msg::GaitState{}; }
+  GS_Type GetType() const override { return GS_Type::SIMPLE; }
+  bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override {
+    (void)name;
+    (void)value;
+    return false;
+  }
+
+ private:
+  std::unique_ptr<ModelInterface> model_;
+  std::unique_ptr<StateInterface> state_;
 };
 
 }  // namespace contract_test

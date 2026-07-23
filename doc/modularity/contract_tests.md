@@ -37,6 +37,7 @@ tests. This is a *shape and plumbing* guard, not a behavioural one.
 | makes an interface constructible on its own | `static_assert(!std::is_default_constructible_v<…>)` fails |
 | changes `N_LEGS` without updating the contact aggregates | the `std::tuple_size_v<…> == N_LEGS` asserts fail (migrated verbatim from the retired M1.4 check) |
 | desyncs `ContactLogicInterface::{FootContacts,Wrenches}` from `WBCInterface::{FootContact,Wrenches}` | the `std::is_same_v<…>` asserts fail — the host passes these straight through (§4.6), so the layouts must match until issue #13 unifies them |
+| changes the plugin lifecycle layer (`StagePlugin::Init`, `StageInit`, `StageInitError` — [`plugin_lifecycle.md`](plugin_lifecycle.md)) | `FakePluginGaitSequencer` stops compiling, the `StagePlugin<…>` shape asserts fail, or the `StagePluginLifecycle` gtest cases fail |
 
 Because every one of these is a **compile** failure, the ordinary `colcon build` (CI's `cbg`) is
 already the compile smoke the issue asks for. `colcon test` only adds the runtime pass, which walks

@@ -36,6 +36,7 @@
 
 #include <memory>
 #include <type_traits>
+#include <utility>
 
 #include "potato_sim/potato_model.hpp"
 
@@ -46,6 +47,7 @@ using contract_test::FakeGait;
 using contract_test::FakeGaitSequencer;
 using contract_test::FakeModelAdaptation;
 using contract_test::FakeMPC;
+using contract_test::FakePluginGaitSequencer;
 using contract_test::FakeSwingLegController;
 using contract_test::FakeWBC;
 
@@ -101,6 +103,21 @@ static_assert(std::tuple_size_v<decltype(ContactLogicInterface::ContactEvents::l
 static_assert(std::tuple_size_v<decltype(ContactLogicInterface::ContactEvents::contact_regained)> == N_LEGS);
 static_assert(
     std::tuple_size_v<decltype(ContactLogicInterface::ContactEvents::swing_scheduled_before_slc_started)> == N_LEGS);
+
+// The plugin lifecycle layer (doc/modularity/plugin_lifecycle.md) is additive:
+// each `StagePlugin<Interface>` base derives from the frozen stage interface and
+// stays an abstract contract itself, so putting a stage behind pluginlib reopens
+// none of the M1 contracts.
+static_assert(IsStageContract<StagePlugin<GaitSequencerInterface>>());
+static_assert(IsStageContract<StagePlugin<MPCInterface>>());
+static_assert(IsStageContract<StagePlugin<SwingLegControllerInterface>>());
+static_assert(IsStageContract<StagePlugin<ModelAdaptationInterface>>());
+static_assert(IsStageContract<StagePlugin<ContactLogicInterface>>());
+static_assert(IsStageContract<StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>());
+static_assert(IsStageContract<StagePlugin<WBCInterface<JointTorqueCommands>>>());
+static_assert(IsStageContract<StagePlugin<WBCInterface<CartesianCommands>>>());
+static_assert(std::is_base_of_v<GaitSequencerInterface, StagePlugin<GaitSequencerInterface>>);
+static_assert(!std::is_abstract_v<FakePluginGaitSequencer>);
 
 // The host passes contact flags and wrenches straight from ContactLogic into the
 // WBC (§4.6). That is only sound while the layouts match; the interfaces restate
@@ -253,6 +270,44 @@ TEST(StageContracts, ContactLogicCallOrderAndPassthrough) {
 TEST(StageContracts, GaitSeam) {
   std::unique_ptr<GaitInterface> gait = std::make_unique<FakeGait>();
   EXPECT_EQ(gait->get_t_stance(0), 0.0);
+}
+
+// -----------------------------------------------------------------------------
+// Plugin lifecycle (doc/modularity/plugin_lifecycle.md): create → Init → run →
+// destroy, with clone ownership handed over in Init and the fail-fast error
+// path the M2.2 loader must surface.
+// -----------------------------------------------------------------------------
+
+TEST(StagePluginLifecycle, InitHandsOverOwnershipThenRuns) {
+  auto plugin = std::make_unique<FakePluginGaitSequencer>();  // as the loader creates it
+
+  StageInit init;
+  init.model = std::make_unique<BrickModel>(MakeModel());
+  init.state = std::make_unique<BrickState>();
+  init.params.emplace(FakePluginGaitSequencer::kRequiredKey, rclcpp::ParameterValue(true));
+  plugin->Init(std::move(init));
+  EXPECT_TRUE(plugin->Initialized());
+
+  // After Init the host owns and drives the stage through the frozen interface.
+  std::unique_ptr<GaitSequencerInterface> gs = std::move(plugin);
+  gs->UpdateTarget(Target{});
+  GaitSequence sequence{};
+  gs->GetGaitSequence(sequence);
+}
+
+TEST(StagePluginLifecycle, MissingRequiredParameterFailsInit) {
+  FakePluginGaitSequencer plugin;
+  EXPECT_THROW(plugin.Init(StageInit{}), StageInitError);
+}
+
+TEST(StagePluginLifecycle, RequireNamesTheMissingKey) {
+  const StageInit init{};
+  try {
+    init.Require("contract_test.absent");
+    FAIL() << "Require must throw for an absent key";
+  } catch (const StageInitError& error) {
+    EXPECT_NE(std::string(error.what()).find("contract_test.absent"), std::string::npos);
+  }
 }
 
 }  // namespace
