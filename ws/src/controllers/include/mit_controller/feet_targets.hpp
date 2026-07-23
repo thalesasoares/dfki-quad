@@ -1,10 +1,13 @@
 #pragma once
 
+#include <Eigen/Core>
 #include <array>
-#include <eigen3/Eigen/Core>
 
-#include "mit_controller_params.hpp"
+#include "mit_controller/pipeline_constants.hpp"
 
+// Per-leg swing targets produced by the swing leg controller and consumed by the
+// whole-body controller. Part of the exported shared pipeline type surface —
+// see doc/modularity/pipeline_types.md.
 struct FeetTargets {
   std::array<Eigen::Vector3d, N_LEGS> positions;
   std::array<Eigen::Vector3d, N_LEGS> velocities;
