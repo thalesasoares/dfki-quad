@@ -283,6 +283,22 @@ ament_target_dependencies(pipeline_types_surface_check common Eigen3)
 target_compile_options(pipeline_types_surface_check PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 # ##############################################################################
+# --- ContactLogicInterface compile check --- #
+# ##############################################################################
+# Keeps the M1.4 header stub (issue #4) compiling while nothing else includes it.
+# Unlike the surface check above it uses the package's normal include paths
+# (inherited from the include_directories() at the top of this file), because
+# ContactLogicInterface deliberately depends on the in-package interface header
+# swing_leg_controller_interface.hpp, which is not part of the exported surface
+# yet. A fake-stub contract test supersedes this in M1.5 (issue #5).
+# See doc/modularity/stage_contracts.md §4.6.
+
+add_library(contact_logic_interface_check OBJECT src/tools/contact_logic_interface_check.cpp)
+
+ament_target_dependencies(contact_logic_interface_check Eigen3 common interfaces rclcpp)
+target_compile_options(contact_logic_interface_check PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+# ##############################################################################
 # --- CPU power consumption logging--- #
 # ##############################################################################
 add_executable(log_cpu_power src/tools/log_cpu_power.cpp)
