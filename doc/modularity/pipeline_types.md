@@ -165,7 +165,8 @@ dependencies — it deliberately does **not** get the package's usual `include/m
 `src` entries. It therefore sees the headers exactly as an out-of-package plugin does, and the build
 fails if a surface header stops being self-contained, starts pulling in node internals, or drifts
 out of sync with `pipeline_constants.hpp`. It is built unconditionally, not under `BUILD_TESTING`,
-so it cannot silently rot. Contract tests proper are issue #5 (M1.5).
+so it cannot silently rot. The stage-shape contract test is a separate, complementary guard, added
+in M1.5 (issue #5) — see [`contract_tests.md`](contract_tests.md).
 
 ### Copying and alignment
 
@@ -205,5 +206,5 @@ aligned `new` handles Eigen's over-aligned fixed-size types, so no
 | #1 | [M1.1] Audit and freeze stage interface APIs | `stage_contracts.md`, the method-side companion |
 | #2 | [M1.2] Remove host→concrete casts | Moved the `sequence_mode` weight switch into the MPC (§4) |
 | #3 | [M1.3] Shared pipeline data types package surface | **This document** |
-| #5 | [M1.5] Contract tests / compile smoke | Extends the surface check (§5) |
+| #5 | [M1.5] Contract tests / compile smoke | Complementary guard, different axis — [`contract_tests.md`](contract_tests.md) |
 | #6 | [M2.1] pluginlib dependency and plugin description XML | Adds the interface headers to the surface (§6) |

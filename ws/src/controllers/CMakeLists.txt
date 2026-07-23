@@ -76,6 +76,31 @@ if (BUILD_TESTING)
     # to all source files
     set(ament_cmake_cpplint_FOUND TRUE)
     ament_lint_auto_find_test_dependencies()
+
+    # ##########################################################################
+    # --- Stage interface contract test (issue #5, M1.5) --- #
+    # ##########################################################################
+    # Fake stubs (test/fake_stages.hpp) implement all six stage interfaces plus
+    # the gait seam; test/test_stage_contracts.cpp static_asserts the contract
+    # shape (§4 of doc/modularity/stage_contracts.md) and drives each fake once
+    # through a unique_ptr<Interface>, the way the host owns its stages. Because
+    # the API-break detection is compile-time, the ordinary `colcon build`
+    # (CI's `cbg`) is already the compile smoke — `colcon test` only adds the
+    # runtime pass. Deps are common/interfaces/rclcpp/Eigen3 only: no drake,
+    # acados, ARC-OPT or hardware, so it builds on both CI lanes.
+    #
+    # This supersedes src/tools/contact_logic_interface_check.cpp (M1.4), whose
+    # N_LEGS sizing asserts are migrated into the test. The M1.3 surface check
+    # (src/tools/pipeline_types_surface_check.cpp) stays: it guards a different
+    # axis (export-only include path). See doc/modularity/contract_tests.md.
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_stage_contracts
+            test/test_stage_contracts.cpp
+            src/potato_sim/potato_model.cpp)
+    target_include_directories(test_stage_contracts PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_stage_contracts common interfaces rclcpp Eigen3)
+    target_compile_options(test_stage_contracts PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif ()
 
 
@@ -282,21 +307,11 @@ set_property(TARGET pipeline_types_surface_check
 ament_target_dependencies(pipeline_types_surface_check common Eigen3)
 target_compile_options(pipeline_types_surface_check PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-# ##############################################################################
-# --- ContactLogicInterface compile check --- #
-# ##############################################################################
-# Keeps the M1.4 header stub (issue #4) compiling while nothing else includes it.
-# Unlike the surface check above it uses the package's normal include paths
-# (inherited from the include_directories() at the top of this file), because
-# ContactLogicInterface deliberately depends on the in-package interface header
-# swing_leg_controller_interface.hpp, which is not part of the exported surface
-# yet. A fake-stub contract test supersedes this in M1.5 (issue #5).
-# See doc/modularity/stage_contracts.md §4.6.
-
-add_library(contact_logic_interface_check OBJECT src/tools/contact_logic_interface_check.cpp)
-
-ament_target_dependencies(contact_logic_interface_check Eigen3 common interfaces rclcpp)
-target_compile_options(contact_logic_interface_check PRIVATE -Wall -Wextra -Wpedantic -Werror)
+# The M1.4 ContactLogicInterface compile check
+# (src/tools/contact_logic_interface_check.cpp) lived here. It is superseded by
+# the M1.5 stage contract test (test/test_stage_contracts.cpp, in the
+# BUILD_TESTING block above), which includes the same header through a fake stub
+# and migrates its N_LEGS sizing asserts. See doc/modularity/contract_tests.md.
 
 # ##############################################################################
 # --- CPU power consumption logging--- #
