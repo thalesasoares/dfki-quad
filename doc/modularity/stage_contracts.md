@@ -478,7 +478,7 @@ Not part of the five frozen contracts, but relevant to the modularity work:
 | #2 | [M1.2] Remove host→concrete casts | Consumes §5 (G1, G2, G3, G5, G7, G9) and §6 |
 | #3 | [M1.3] Shared pipeline data types package surface | Consumed §7 — **done**, see [`pipeline_types.md`](pipeline_types.md) |
 | #4 | [M1.4] Define `ContactLogicInterface` | **This PR** — §4.6, header stub; adds G11 |
-| #5 | [M1.5] Contract tests / compile smoke | Asserts §4 method tables |
+| #5 | [M1.5] Contract tests / compile smoke | Asserts §4 method tables — [`contract_tests.md`](contract_tests.md) |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns G6, G10 |
 | #12 | [M3.1] Extract contact FSM into `ContactLogic` plugin | Implements §4.6; owns G11 |
 | #13 | [M3.2] Runtime WBC / command-type profile | Owns G8 |
