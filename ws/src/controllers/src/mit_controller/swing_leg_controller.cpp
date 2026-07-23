@@ -174,4 +174,22 @@ void SwingLegController::SetWorldBlend(double world_blend) { world_blend_ = worl
 void SwingLegController::SetMaximumSwingProgressToUpdateTarget(double maximum_swing_leg_progress_to_update_target) {
   maximum_swing_leg_progress_to_update_target_ = maximum_swing_leg_progress_to_update_target;
 }
+
+bool SwingLegController::SetParameter(const std::string &name, const rclcpp::ParameterValue &value) {
+  if (name == "slc_swing_height") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return false;
+    SetSwingHeight(value.get<double>());
+    return true;
+  } else if (name == "slc_world_blend") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return false;
+    SetWorldBlend(value.get<double>());
+    return true;
+  } else if (name == "maximum_swing_leg_progress_to_update_target") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return false;
+    SetMaximumSwingProgressToUpdateTarget(value.get<double>());
+    return true;
+  }
+  return false;
+}
+
 void SwingLegController::UpdateModel(const ModelInterface &model) { *quad_model_ = model; }

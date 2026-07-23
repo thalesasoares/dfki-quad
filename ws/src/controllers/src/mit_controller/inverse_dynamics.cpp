@@ -98,3 +98,26 @@ void InverseDynamics::setTransformationFilterSize(unsigned int filter_size) {
 void InverseDynamics::setTargetVelocityBlend(double blend) {
   target_velocity_blend_ = std::max(std::min(blend, 1.0), 0.0);
 }
+
+bool InverseDynamics::SetParameter(const std::string& name, const rclcpp::ParameterValue& value) {
+  if (name == "wbc.inverse_dynamics.foot_position_based_on_target_height") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) return false;
+    setFootPositionBasedOnTargetHeight(value.get<bool>());
+    return true;
+  } else if (name == "wbc.inverse_dynamics.foot_position_based_on_target_orientation") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) return false;
+    setFootPositionBasedOnTargetOrientation(value.get<bool>());
+    return true;
+  } else if (name == "wbc.inverse_dynamics.target_velocity_blend") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return false;
+    setTargetVelocityBlend(value.get<double>());
+    return true;
+  } else if (name == "wbc.inverse_dynamics.transformation_filter_size") {
+    // Previously the host mistakenly routed this to setFootPositionBasedOnTargetOrientation
+    // (issue #2, gap G7); it now reaches the correct setter.
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER) return false;
+    setTransformationFilterSize(static_cast<unsigned int>(value.get<int64_t>()));
+    return true;
+  }
+  return false;
+}
