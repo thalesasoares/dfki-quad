@@ -1,0 +1,22 @@
+<!--
+  Whole-body-controller stage plugins (issue #6, M2.1).
+
+  base_class_type: StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>
+    (mit_controller/stage_plugin.hpp + mit_controller/wbc_interface.hpp
+     + mit_controller/joint_commands.hpp)
+
+  WBCInterface is still a class template (gap G8, issue #13), so there is no single
+  StagePlugin<WBCInterface> base — only per-command-type instantiations. For the M2
+  Go2 product path the base is the JointTorqueVelocityPositionCommands instantiation
+  (doc/modularity/plugin_lifecycle.md §6). When #13 (M3.2) de-templates the
+  interface, THIS FILE is the one that gets reworked — the other stage XML files are
+  unaffected, which is why the WBC declaration is isolated here.
+
+  Empty schema-only declaration; stock wrappers land in M2.3 (issue #8). Suggested
+  stock IDs (issue #8): wbc_arc_opt, inverse_dynamics.
+
+  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
+  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+-->
+<class_libraries>
+</class_libraries>

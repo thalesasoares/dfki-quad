@@ -15,6 +15,8 @@
   <!-- Stage interface contract test (issue #5, M1.5); see
        doc/modularity/contract_tests.md. -->
   <test_depend>ament_cmake_gtest</test_depend>
+  <!-- Plugin discovery test (issue #6, M2.1): reads the pluginlib ament resource. -->
+  <test_depend>ament_index_cpp</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
@@ -27,6 +29,10 @@
   <depend>common</depend>
   <depend>rclcpp</depend>
   <depend>rclpy</depend>
+  <!-- Plugin host foundation (issue #6, M2.1): pluginlib discovers and loads the
+       control-pipeline stages exported through StagePlugin<Interface>. See
+       doc/modularity/plugin_lifecycle.md and doc/modularity/plugin_discovery.md. -->
+  <depend>pluginlib</depend>
   <!-- Exported alongside the shared pipeline type surface (issue #3): the
        installed headers in include/mit_controller/ are Eigen aggregates, so
        consumers of this package need Eigen too. -->

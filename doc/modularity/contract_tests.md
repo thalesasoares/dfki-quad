@@ -54,10 +54,13 @@ three instantiations may rot before issue #13 de-templates it.
 - **Stage behaviour.** The fakes compute nothing; they only satisfy the contract. Correctness of
   `MPC`, `SwingLegController`, etc. is out of scope.
 - **Export self-containment.** That axis stays with `src/tools/pipeline_types_surface_check.cpp`
-  (M1.3), which compiles the exported type headers under a *restricted, export-only* include path to
-  prove an out-of-package plugin can include them. This test deliberately uses the package's normal
-  include paths, because the stage interface headers are not exported yet — they join the surface in
-  M2.1 (issue #6).
+  (M1.3, extended in M2.1), which compiles the exported type *and* stage interface headers under a
+  *restricted, export-only* include path to prove an out-of-package plugin can include them. This
+  test deliberately uses the package's normal include paths.
+- **Plugin discovery.** That the plugin description XML is exported and a `ClassLoader` finds each
+  stage base is `test/test_plugin_discovery.cpp` (M2.1, issue #6) — see
+  [`plugin_discovery.md`](plugin_discovery.md) §4. Different axis: the ament resource and XML, not the
+  interface shape.
 
 ## 4. How to run it
 
@@ -91,7 +94,7 @@ different, export-only axis described in §3.
 | #3 | [M1.3] Shared pipeline data types package surface | Complements the surface check (different axis, §3) |
 | #4 | [M1.4] Define `ContactLogicInterface` | Absorbs and removes its compile check |
 | #5 | [M1.5] Contract tests / compile smoke | **This document** |
-| #6 | [M2.1] pluginlib dependency and plugin description XML | Exports the interface headers; the fakes seed the loader test |
+| #6 | [M2.1] pluginlib dependency and plugin description XML | Exported the interface headers (extending the surface check) and added `test_plugin_discovery.cpp` — [`plugin_discovery.md`](plugin_discovery.md) |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | The refactor this test protects |
 | #13 | [M3.2] Runtime WBC / command-type profile | Removes the template the WBC block works around (gap G8) |
 | #17 | [M4.2] Example passthrough / logging plugin | Starts from `FakeContactLogic`'s pass-through `Reconcile` |

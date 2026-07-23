@@ -184,21 +184,20 @@ aligned `new` handles Eigen's over-aligned fixed-size types, so no
 - **No new package.** The include root stays `mit_controller/` inside `controllers`, the spelling
   every stage header already uses.
 - **No layout or semantic changes.** M1.3 changed include lines, CMake rules and documentation only.
-- **Stage interface headers are not yet exported.** `*_interface.hpp` join the surface in M2.1
-  (issue #6) together with the pluginlib base. They are not exportable as-is:
-  `mpc_interface.hpp` and `gait_sequencer_interface.hpp` include `potato_sim/potato_model.hpp`, a
-  node-internal header, which that PR has to resolve. `SolverInformation`, `WBCReturn` and
-  `joint_commands.hpp` travel with their interfaces. The pluginlib base itself,
-  `mit_controller/stage_plugin.hpp` (specified ahead of M2.2 — see
-  [`plugin_lifecycle.md`](plugin_lifecycle.md)), is already self-contained and joins the surface in
-  the same PR.
+- **Stage interface headers are exported as of M2.1 (issue #6).** `*_interface.hpp` joined the
+  surface together with the pluginlib base — see [`plugin_discovery.md`](plugin_discovery.md) §2. The
+  dead `potato_sim/potato_model.hpp` includes in `mpc_interface.hpp` / `gait_sequencer_interface.hpp`
+  were removed (follow-up #2 below, now resolved); `SolverInformation`, `WBCReturn` and
+  `joint_commands.hpp` travel with their interfaces (and `joint_commands.hpp` was retargeted off the
+  host-only `mit_controller_params.hpp` onto `pipeline_constants.hpp`). The pluginlib base,
+  `mit_controller/stage_plugin.hpp`, was already self-contained.
 
 ## 7. Known follow-ups
 
 | # | Item | Owner |
 |---|---|---|
 | 1 | `common` calls no `ament_export_dependencies`, so consumers must `find_package` its transitive dependencies themselves (§2). Fixing it would shorten the consumer boilerplate. | unfiled |
-| 2 | `mpc_interface.hpp` / `gait_sequencer_interface.hpp` depend on `potato_sim/potato_model.hpp`; must be resolved before the interfaces can be exported. | #6 (M2.1) |
+| 2 | ~~`mpc_interface.hpp` / `gait_sequencer_interface.hpp` depend on `potato_sim/potato_model.hpp`; must be resolved before the interfaces can be exported.~~ **Resolved in M2.1 (#6):** the includes were dead and were removed. | #6 (M2.1) |
 | 3 | `common` exports `ROBOT_MODEL=<robot>` as an INTERFACE compile definition on `quad_model_symbolic`, so it leaks into every consumer of `common`. Harmless today, but it means the macro's presence proves nothing about the consumer's own configuration. | unfiled |
 
 ## 8. Related issues
@@ -210,4 +209,4 @@ aligned `new` handles Eigen's over-aligned fixed-size types, so no
 | #2 | [M1.2] Remove host→concrete casts | Moved the `sequence_mode` weight switch into the MPC (§4) |
 | #3 | [M1.3] Shared pipeline data types package surface | **This document** |
 | #5 | [M1.5] Contract tests / compile smoke | Complementary guard, different axis — [`contract_tests.md`](contract_tests.md) |
-| #6 | [M2.1] pluginlib dependency and plugin description XML | Adds the interface headers to the surface (§6) |
+| #6 | [M2.1] pluginlib dependency and plugin description XML | Added the interface headers to the surface (§6); see [`plugin_discovery.md`](plugin_discovery.md) |

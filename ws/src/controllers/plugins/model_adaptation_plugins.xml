@@ -1,0 +1,14 @@
+<!--
+  Model-adaptation stage plugins (issue #6, M2.1).
+
+  base_class_type: StagePlugin<ModelAdaptationInterface>
+    (mit_controller/stage_plugin.hpp + model_adaptation/model_adaptation_interface.hpp)
+
+  Empty schema-only declaration; stock wrappers land in M2.3 (issue #8). Suggested
+  stock IDs (issue #8): kf_adaptation, rls_adaptation.
+
+  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
+  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+-->
+<class_libraries>
+</class_libraries>

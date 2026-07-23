@@ -1,0 +1,25 @@
+<!--
+  Gait sequencer stage plugins (issue #6, M2.1).
+
+  base_class_type: StagePlugin<GaitSequencerInterface>
+    (mit_controller/stage_plugin.hpp + mit_controller/gait_sequencer_interface.hpp)
+
+  This file defines the discovery point for gait-sequencer plugins. It ships with
+  no <library>/<class> entries yet: M2.1 exports the surface and the schema only.
+  The stock wrappers land in M2.3 (issue #8) as, e.g.:
+
+    <library path="libgait_sequencer_plugins">
+      <class name="simple_gait"
+             type="SimpleGaitSequencerPlugin"
+             base_class_type="StagePlugin<GaitSequencerInterface>">
+        <description>...</description>
+      </class>
+      <class name="adaptive_gait" .../>   <!-- bio_gait waits for M4.1 (#16) -->
+    </library>
+
+  Suggested stock IDs (issue #8): simple_gait, adaptive_gait.
+  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
+  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+-->
+<class_libraries>
+</class_libraries>
