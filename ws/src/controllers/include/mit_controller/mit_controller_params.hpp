@@ -1,18 +1,17 @@
 #pragma once
 
-static constexpr int N_LEGS = 4;
-static constexpr int N_JOINTS_PER_LEG = 3;
-static constexpr int GAIT_SEQUENCE_SIZE = 100;
-static constexpr int MPC_PREDICTION_HORIZON = 10;
-static constexpr double MPC_DT = 0.05;
-static constexpr double MPC_CONTROL_DT = 0.01;
-static constexpr double SWING_LEG_DT = 0.002;
-static constexpr double CONTROL_DT = 0.002;
-static constexpr double WBC_CYCLE_DT = CONTROL_DT;
-static constexpr double MODEL_ADAPTATION_DT = 0.01;
-static constexpr double MODEL_ADAPTATION_BATCH_SIZE = 100;
+// Host configuration for `mit_controller_node`.
+//
+// The structural constants of the pipeline (sizes, horizons, loop periods) moved
+// to `mit_controller/pipeline_constants.hpp` in M1.3 (issue #3) so that they can
+// be exported to out-of-package stage plugins. They are re-included here, so
+// every existing include site of this header keeps seeing the same set of names.
+//
+// What remains below is host-only and is *not* part of the exported surface: the
+// `PUBLISH_*` diagnostic switches and the `USE_WBC` selector, which depends on
+// the `ROBOT_MODEL` compile definition that only this package's targets set.
 
-static constexpr int FEET_POSITION_SEQUENCE_SIZE = int((MPC_DT / MPC_CONTROL_DT) * GAIT_SEQUENCE_SIZE);
+#include "mit_controller/pipeline_constants.hpp"
 
 // message publishers
 static const bool PUBLISH_SWING_LEG_TRAJECTORIES = false;
