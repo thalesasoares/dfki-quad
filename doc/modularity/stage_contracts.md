@@ -1,7 +1,8 @@
 # Control Pipeline Stage Contracts
 
 **Status:** frozen as of M1.1 (issue #1); host→concrete casts removed in M1.2 (issue #2); shared
-data types exported in M1.3 (issue #3) ·
+data types exported in M1.3 (issue #3); `ContactLogicInterface` specified in M1.4 (issue #4, §4.6 —
+header stub, not yet wired) ·
 **Applies to:** `ws/src/controllers` ·
 **Companion document:** [`pipeline_types.md`](pipeline_types.md) — the data the methods below
 exchange, and the include path plugins compile against
@@ -39,6 +40,11 @@ Rules going forward:
 | Whole-body control | `mit_controller/wbc_interface.hpp` | `WBCArcOPT` (Go2), `InverseDynamics` (ULab) |
 | Model adaptation | `model_adaptation/model_adaptation_interface.hpp` | `KFModelAdaptation`, `LeastSquaresModelAdaptation` |
 
+A **sixth stage** — contact reconciliation — has its contract specified in §4.6
+(`mit_controller/contact_logic_interface.hpp`, issue #4) but is not in this table because it has no
+concrete implementation and no host wiring yet; its logic still runs inline in the control loop.
+Issue #12 (M3.1) adds the `DefaultContactLogic` implementation and moves it behind the interface.
+
 ```mermaid
 flowchart LR
     T["Target<br/>(/quad_control_target)"] --> GS
@@ -46,14 +52,21 @@ flowchart LR
     GS["GaitSequencer<br/>100 Hz"] -->|GaitSequence| MPC["MPC<br/>100 Hz"]
     GS -->|GaitSequence| SLC["SwingLegController<br/>500 Hz"]
     GS -->|GaitSequence| MA
-    MPC -->|WrenchSequence<br/>MPCPrediction| WBC["WBC<br/>500 Hz"]
-    SLC -->|FeetTargets| WBC
+    GS -->|GaitSequence| CL
+    MPC -->|MPCPrediction| WBC["WBC<br/>500 Hz"]
+    MPC -->|WrenchSequence| CL
+    SLC -->|FeetTargets| CL
+    S --> CL
+    CL["ContactLogic<br/>500 Hz<br/>(§4.6, M3.1)"] ==>|reconciled FootContact,<br/>Wrenches, FeetTargets| WBC
     WBC -->|JointCommandType| OUT["/leg_cmd<br/>/leg_joint_cmd"]
-    MA["ModelAdaptation<br/>100 Hz"] -.->|ModelInterface| GS & MPC & SLC & WBC
+    MA["ModelAdaptation<br/>100 Hz"] -.->|ModelInterface| GS & MPC & SLC & WBC & CL
 ```
 
 Solid arrows are per-cycle data flow. The dashed arrow is the model-update broadcast, which is
-event-driven rather than periodic (§4.5).
+event-driven rather than periodic (§4.5). The **thick arrow** out of `ContactLogic` marks the sixth
+stage, which is *specified* (§4.6) but **not yet wired**: today its logic runs inline in
+`ControlLoopCallback` between the SLC/MPC outputs and the WBC. Extracting it behind
+`ContactLogicInterface` is issue #12 (M3.1).
 
 ## 3. Timing and threading
 
@@ -276,6 +289,82 @@ accessors (called unconditionally, for `/quad_model_debug`, whether or not the m
 **Threading.** This stage runs in its own callback group with **no mutex protecting the model it
 mutates** — see G6. The `Get*` accessors are `const` and must be side-effect free.
 
+### 4.6 `ContactLogicInterface`
+
+Header: `ws/src/controllers/include/mit_controller/contact_logic_interface.hpp`
+
+> **Status: specified in M1.4 (issue #4); no host wiring until M3.1 (issue #12).** This section is
+> the behavioural contract the extraction must reproduce. Today the logic runs inline in
+> `ControlLoopCallback` (`mit_controller_node.cpp:989-1109`) and the FSM states are the private enum
+> `MITController::LegStatus` (`mit_controller_node.hpp:50`). Nothing constructs the interface yet.
+
+The stage reconciles the **planned** contact schedule from the gait sequencer against the **sensed**
+foot contacts from the state: it runs a per-leg FSM and overrides the WBC inputs — contact flags,
+wrenches and foot targets — for feet that are in early, late or lost contact.
+
+| Method | Dir | Called from (planned) | Rate |
+|---|---|---|---|
+| `void UpdateState(const StateInterface&)` | in | `ControlLoopCallback`, under `wbc_lock_` | 500 Hz |
+| `void UpdateGaitSequence(const GaitSequence&)` | in | `ControlLoopCallback` | 500 Hz |
+| `void UpdateWrenchSequence(const WrenchSequence&)` | in | `ControlLoopCallback` | 500 Hz |
+| `void UpdateSwingLegState(const FeetTargets&, const std::array<double, N_LEGS>&, const std::array<SwingLegControllerInterface::LegState, N_LEGS>&)` | in | `ControlLoopCallback` | 500 Hz |
+| `void UpdateModel(const ModelInterface&)` | in | `ModelAdaptationCallback` | event-driven |
+| `void Reconcile(FootContacts&, Wrenches&, FeetTargets&)` | in/out | `ControlLoopCallback` | 500 Hz |
+| `void GetLegContactStates(std::array<LegContactState, N_LEGS>&) const` | out | diagnostics | 500 Hz |
+| `void GetContactEvents(ContactEvents&) const` | out | logging / heartbeat | 500 Hz |
+| `bool SetParameter(const std::string&, const rclcpp::ParameterValue&)` | in | parameter-event callback | on `ros2 param set` |
+
+**Data.** In: the sensed contacts (`StateInterface::GetFeetContacts`), the planned schedule
+(`GaitSequence`), the MPC forces (`WrenchSequence`) and the SLC outputs (targets, progress,
+`LegState`). Out, all three in/out arguments of `Reconcile`: `FootContacts = std::array<bool,
+N_LEGS>` and `Wrenches = std::array<Eigen::Vector3d, N_LEGS>` (restated from
+`WBCInterface<T>::FootContact`/`::Wrenches` because that interface is still a template — G8), and
+`FeetTargets`. `LegContactState` is `{SWING, STANCE, EARLY_CONTACT, LATE_CONTACT, LOST_CONTACT}`;
+`ContactEvents` carries the per-leg transitions for host logging and the `num_early_contacts`
+heartbeat counter, so the stage needs no logger or heartbeat dependency.
+
+**Call order.** `UpdateState` → `UpdateGaitSequence` → `UpdateWrenchSequence` → `UpdateSwingLegState`
+→ `Reconcile` → the two `Get*` accessors. The host seeds the three `Reconcile` arguments with
+`wrench_sequence.forces[0]`, the SLC `feet_targets` and `gait_sequence.contact_sequence[0]` — exactly
+the inline code's starting point — and the method reconciles them in place. `Reconcile` mutates
+internal state (per-leg status, hold positions) and must be called **exactly once per cycle**, like
+`ModelAdaptationInterface::DoModelAdaptation`; the `Get*` accessors are `const` and may be called
+more than once.
+
+**Behavioural contract — the FSM.** Per leg, with `planned = contact_sequence[0][leg]` and `sensed =
+GetFeetContacts()[leg]`, gated on the four detection toggles:
+
+| From | Condition | To | Side effect |
+|---|---|---|---|
+| `SWING` | `early_contact_detection ∧ ¬planned ∧ sensed ∧ progress > 0.5` | `EARLY_CONTACT` | record hold position in **world**; `num_early_contacts++` |
+| `SWING` | `late_contact_detection ∧ planned ∧ ¬sensed` | `LATE_CONTACT` | record slip hold in **body** frame |
+| `SWING` | `planned` (neither above) | `STANCE` | — |
+| `STANCE` | `¬planned` | `SWING` | — |
+| `STANCE` | `lost_contact_detection ∧ planned ∧ ¬sensed` | `LOST_CONTACT` | record slip hold in **body** frame |
+| `EARLY_CONTACT` | `planned` | `STANCE` | — |
+| `LATE_CONTACT` / `LOST_CONTACT` | `sensed ∧ planned` | `STANCE` | contact regained, stance scheduled |
+| `LATE_CONTACT` / `LOST_CONTACT` | `sensed ∧ ¬planned` | `SWING` | contact regained, flight scheduled |
+| `LATE_CONTACT` / `LOST_CONTACT` | `late_contact_reschedule_swing_phase ∧ ¬planned` | `SWING` | reschedule swing despite missing contact |
+
+`LOST_CONTACT` shares `LATE_CONTACT`'s transitions and output. Output application after the
+transition: `STANCE` tracks `foot_position_sequence[0]` (zero velocity/acceleration) and records it
+as the last target; `SWING` zeroes the wrench and, if the SLC has not started this swing
+(`LegState` `STANCE`/`NOT_STARTED`), holds the last target and raises the
+`swing_scheduled_before_slc_started` event; `EARLY_CONTACT` forces the contact flag true, holds the
+recorded world position, and substitutes the next scheduled stance wrench rotated into the current
+orientation; `LATE_CONTACT`/`LOST_CONTACT` force the contact flag false, hold the slip position
+transformed back to world, and zero the wrench.
+
+**Threading.** The host runs this stage inside the control loop under `wbc_lock_`, single-threaded
+with respect to the WBC. `UpdateModel` arrives from the model-adaptation broadcast (§4.5); until the
+lock discipline of G6 is regularised the extraction (issue #12) must not assume `UpdateModel` and
+`Reconcile` are mutually excluded — see G11.
+
+**Runtime tuning.** `SetParameter` handles the four `contact_logic.*` detection toggles
+(`early_contact_detection`, `late_contact_detection`, `lost_contact_detection`,
+`late_contact_reschedule_swing_phase`), which are host member flags today
+(`mit_controller_node.hpp:66-69`). Wired in M3.1.
+
 ## 5. Gaps between the contracts and the current host
 
 Every item below is a place where `mit_controller_node` does not respect the contract above, or
@@ -293,6 +382,7 @@ where the contract is incomplete. Each has an owning follow-up issue.
 | G8 | `WBCInterface` is a template | `WBCType` is a `std::conditional<USE_WBC, …>` typedef (`mit_controller_node.hpp:112-114`); `reinterpret_cast` was at `:604, 623, 1257, 1269` | A class template cannot be a pluginlib base class; the command type must become a runtime choice. **Partially addressed in M1.2:** all four `reinterpret_cast`s removed (construction and `GetJointCommand` dispatch now use `if constexpr` in templated contexts; a mismatched `leg_control_mode_` is a logged error instead of UB). De-templating the interface itself remains **#13** | #13 |
 | G9 | `AdaptiveGaitSequencer` config escape hatch | was `dynamic_cast` + `ad_gs->Gait()` at `:316-317`, reaching ~15 `AdaptiveGait` setters | The one *guarded* cast, so not unsafe — but still concrete-type coupling. **Fixed in M1.2:** the ~15 setters moved into `AdaptiveGaitSequencer::SetParameter`; the host no longer `dynamic_cast`s | #2 — **fixed** |
 | G10 | Unsynchronised diagnostic reads | `gs_->GetGaitState()` at `:959` runs after `gait_sequencer_lock_` is released at `:881`; `slc_->GetCurrentTrajs()` at `:1301` runs after `wbc_lock_` is released and never takes `slc_lock_` | Data race against `UpdateModel` / `SLCLoopCallback`. Low severity (diagnostics only) but it means `Get*` methods cannot be documented as "called under the stage lock" | #9 |
+| G11 | Contact FSM reads unlocked member state | the `LATE_CONTACT`/`LOST_CONTACT` output branch at `:1103-1105` reads the member `quad_state_` directly (`GetPositionInWorld`/`GetOrientationInWorld`) instead of the `quad_state_temp` copy taken under `quad_state_lock_` at `:964-966` that the rest of the callback uses | Data race against the state subscription writing `quad_state_`. Pre-existing; the extraction (§4.6) must pass the locked state copy into the stage so `ContactLogicInterface` reads only its `UpdateState` argument | #12 |
 
 **Cast inventory:** `grep -c reinterpret_cast ws/src/controllers/src/mit_controller_node.cpp` → **0**
 as of M1.2 (was 18, covering G1×7, G2×3, G3×4, G8×4). `dynamic_cast` for stage access is likewise 0
@@ -369,12 +459,13 @@ Not part of the five frozen contracts, but relevant to the modularity work:
   (`Target`, `GaitSequence`, `WrenchSequence`, `MPCPrediction`, `FeetTargets`) are exported from
   `controllers` as of M1.3 — see [`pipeline_types.md`](pipeline_types.md). The stage **interface**
   headers are not exported yet; that is M2.1 (issue #6).
-- **The contact FSM has no interface at all.** `SWING / STANCE / EARLY_CONTACT / LATE_CONTACT /
-  LOST_CONTACT` is declared as a private enum on `MITController`
-  (`mit_controller_node.hpp:50`) and implemented inline in `ControlLoopCallback`
-  (`:1088-1200`), controlling early/late/lost contact handling and swing-phase rescheduling. It is a
-  sixth pipeline stage in everything but name. Extracting it is issue #4 (M1.4, define
-  `ContactLogicInterface`) and issue #12 (M3.1, extract the implementation).
+- **The contact FSM is a sixth pipeline stage.** `SWING / STANCE / EARLY_CONTACT / LATE_CONTACT /
+  LOST_CONTACT` is declared as a private enum on `MITController` (`mit_controller_node.hpp:50`) and
+  implemented inline in `ControlLoopCallback` (`:989-1109`), controlling early/late/lost contact
+  handling and swing-phase rescheduling. Its contract is now specified in §4.6 behind
+  `mit_controller/contact_logic_interface.hpp` (issue #4, M1.4 — header stub only). Extracting the
+  implementation into a `DefaultContactLogic` plugin and wiring the host to call it is issue #12
+  (M3.1).
 - **The model-update broadcast** (`:1009-1032`) is duplicated logic across four stages and is
   issue #15 (M3.4).
 
@@ -386,8 +477,9 @@ Not part of the five frozen contracts, but relevant to the modularity work:
 | #1 | [M1.1] Audit and freeze stage interface APIs | **This document** |
 | #2 | [M1.2] Remove host→concrete casts | Consumes §5 (G1, G2, G3, G5, G7, G9) and §6 |
 | #3 | [M1.3] Shared pipeline data types package surface | Consumed §7 — **done**, see [`pipeline_types.md`](pipeline_types.md) |
-| #4 | [M1.4] Define `ContactLogicInterface` | Consumes §7 |
+| #4 | [M1.4] Define `ContactLogicInterface` | **This PR** — §4.6, header stub; adds G11 |
 | #5 | [M1.5] Contract tests / compile smoke | Asserts §4 method tables |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns G6, G10 |
+| #12 | [M3.1] Extract contact FSM into `ContactLogic` plugin | Implements §4.6; owns G11 |
 | #13 | [M3.2] Runtime WBC / command-type profile | Owns G8 |
 | #15 | [M3.4] Model update broadcast helper | Consumes §4.5 |
