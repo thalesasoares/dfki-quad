@@ -34,6 +34,13 @@ class MPC : public MPCInterface {
   double fmax_;
   double mu_;
 
+  // MPC cost weights per gait-sequence mode. The active set follows sequence_mode of the gait
+  // sequence provided in UpdateGaitSequence; the KEEP<->MOVE switch used to live in the host
+  // (issue #2, gap G1).
+  Eigen::Matrix<double, STATE_SIZE - 1, 1> state_weights_stand_;
+  Eigen::Matrix<double, STATE_SIZE - 1, 1> state_weights_move_;
+  GaitSequence::Mode active_weights_mode_;
+
   // This typedefs automatically enforce the correct storage order to be used as raw pointers for acados
   // (see: https://discourse.acados.org/t/storage-order-of-c-interface/1379/3)
   typedef Eigen::Matrix<double, STATE_SIZE, STATE_SIZE, Eigen::ColMajor> AMatrixT;
@@ -119,7 +126,8 @@ class MPC : public MPCInterface {
 
  public:
   MPC(double alpha,
-      const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights,
+      const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights_stand,
+      const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights_move,
       double mu,
       double fmin,
       double fmax,
@@ -146,6 +154,8 @@ class MPC : public MPCInterface {
   void SetInputWeights(double alpha);
   void SetFmax(double fmax);
   void SetMu(double mu);
+
+  bool SetParameter(const std::string &name, const rclcpp::ParameterValue &value) override;
 
   ~MPC() override;
 };
