@@ -123,7 +123,6 @@ class MITController : public rclcpp::Node {
   FeetTargets feet_targets_;
   std::array<double, ModelInterface::N_LEGS> feet_swing_progress_;
   std::array<SwingLegControllerInterface::LegState, ModelInterface::N_LEGS> feet_swing_states_;
-  GaitSequence::Mode last_gait_sequence_mode_;
   std::array<Eigen::Vector3d, ModelInterface::N_LEGS> last_feet_pos_targets_;
   std::array<LegStatus, ModelInterface::N_LEGS> feet_status_;
   std::array<Eigen::Vector3d, ModelInterface::N_LEGS> early_contact_hold_position_;
