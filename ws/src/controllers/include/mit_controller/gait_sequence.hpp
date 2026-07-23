@@ -1,11 +1,14 @@
 #pragma once
 
+#include <Eigen/Dense>
 #include <array>
 
 #include "common/state_interface.hpp"
-#include "eigen3/Eigen/Dense"
-#include "mit_controller_params.hpp"
+#include "mit_controller/pipeline_constants.hpp"
 
+// Output of the gait sequencing stage; consumed by the MPC, the swing leg
+// controller and model adaptation. Part of the exported shared pipeline type
+// surface — see doc/modularity/pipeline_types.md.
 struct GaitSequence {
   // Time point of gs creation such that the time dependent value are all valid
   StateInterface::TimePoint time_stamp;

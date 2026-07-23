@@ -150,10 +150,17 @@ if (NOT WITHOUT_DRAKE)
     ament_target_dependencies(mitcontroller Eigen3 interfaces common drake simulator)
     target_link_libraries(mitcontroller acados matplot)
     target_compile_options(mitcontroller PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    ament_export_targets(mitcontroller HAS_LIBRARY_TARGET)
+    # `mitcontroller` is an *executable*, so its generated export file declares
+    # `add_executable(controllers::mitcontroller IMPORTED)`. Exporting it put that
+    # imported executable into `controllers_TARGETS`, so every downstream
+    # `ament_target_dependencies(<tgt> controllers)` tried to link an executable
+    # and failed at CMake generate time with "links to target
+    # controllers::mitcontroller but the target was not found" — i.e. this package
+    # could not be consumed by any other package at all. The export is dropped
+    # here so that the shared pipeline type surface is actually usable (issue #3,
+    # M1.3); the binary itself is still installed to `bin` exactly as before.
     install(
             TARGETS mitcontroller
-            EXPORT mitcontroller
             LIBRARY DESTINATION lib
             ARCHIVE DESTINATION lib
             RUNTIME DESTINATION bin
@@ -256,6 +263,26 @@ target_include_directories(
 
 
 # ##############################################################################
+# --- Shared pipeline type surface compile check --- #
+# ##############################################################################
+# Builds the exported pipeline type headers with a deliberately restricted
+# include path — `include/` plus the `common` and Eigen dependencies only, i.e.
+# what an out-of-package stage plugin sees. This fails the build if a surface
+# header stops being self-contained or starts depending on node internals.
+# See doc/modularity/pipeline_types.md (issue #3, M1.3).
+
+add_library(pipeline_types_surface_check OBJECT src/tools/pipeline_types_surface_check.cpp)
+
+# Drop the directory-level include_directories() above: no include/mit_controller,
+# no src/. Must be set before ament_target_dependencies, which appends to this
+# same property.
+set_property(TARGET pipeline_types_surface_check
+        PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+ament_target_dependencies(pipeline_types_surface_check common Eigen3)
+target_compile_options(pipeline_types_surface_check PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+# ##############################################################################
 # --- CPU power consumption logging--- #
 # ##############################################################################
 add_executable(log_cpu_power src/tools/log_cpu_power.cpp)
@@ -295,5 +322,28 @@ else ()
 endif ()
 
 install(DIRECTORY launch config trajectories DESTINATION share/${PROJECT_NAME}/)
+
+###################################
+# Shared pipeline type surface    #
+###################################
+# The in-process data types the control pipeline stages exchange (issue #3,
+# M1.3). This is an explicit allowlist, not `install(DIRECTORY include/)`: the
+# rest of `include/` is node and algorithm internals and must stay private so
+# that "stable surface" keeps meaning something. Stage interface headers join
+# this list in M2.1 (issue #6) when the pluginlib base lands.
+#
+# Keep in sync with src/tools/pipeline_types_surface_check.cpp and
+# doc/modularity/pipeline_types.md.
+install(FILES
+        include/mit_controller/target.hpp
+        include/mit_controller/gait_sequence.hpp
+        include/mit_controller/wrench_sequence.hpp
+        include/mit_controller/feet_targets.hpp
+        include/mit_controller/mpc_prediction.hpp
+        include/mit_controller/pipeline_constants.hpp
+        DESTINATION include/mit_controller)
+
+ament_export_include_directories(include)
+ament_export_dependencies(common Eigen3)
 
 ament_package()

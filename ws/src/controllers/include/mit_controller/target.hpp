@@ -2,6 +2,10 @@
 
 #include <Eigen/Dense>
 
+// Operator setpoint entering the pipeline at the gait sequencing stage. Each
+// field has a matching flag in `active`; an inactive field is ignored by the
+// sequencer. Part of the exported shared pipeline type surface — see
+// doc/modularity/pipeline_types.md.
 struct Target {
   double x = 0.0;      // world frame
   double y = 0.0;      // world frame
