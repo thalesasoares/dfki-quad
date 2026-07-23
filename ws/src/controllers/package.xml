@@ -24,4 +24,8 @@
   <depend>common</depend>
   <depend>rclcpp</depend>
   <depend>rclpy</depend>
+  <!-- Exported alongside the shared pipeline type surface (issue #3): the
+       installed headers in include/mit_controller/ are Eigen aggregates, so
+       consumers of this package need Eigen too. -->
+  <depend>eigen</depend>
 </package>
