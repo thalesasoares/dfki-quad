@@ -1,5 +1,9 @@
 #pragma once
 
+#include <rclcpp/parameter_value.hpp>
+
+#include <string>
+
 #include "common/model_interface.hpp"
 #include "common/state_interface.hpp"
 #include "feet_targets.hpp"
@@ -71,6 +75,16 @@ class SwingLegControllerInterface {
    */
   virtual void GetCurrentTrajs(std::array<Eigen::Vector3d, N_LEGS> &start_pos,
                                std::array<Eigen::Vector3d, N_LEGS> &end_pos) = 0;
+  /**
+   * Applies a runtime parameter to this stage.
+   * Called from the host parameter-event callback with the stage's mutex (slc_lock_) held, never
+   * from the control loops. An implementation that recognises no runtime parameters returns false.
+   *
+   * @param name the full ROS parameter name (e.g. "slc_swing_height")
+   * @param value the new parameter value
+   * @return true if the key was recognised and applied, false otherwise (the host logs a warning)
+   */
+  virtual bool SetParameter(const std::string &name, const rclcpp::ParameterValue &value) = 0;
 
   virtual ~SwingLegControllerInterface() = default;
 };
