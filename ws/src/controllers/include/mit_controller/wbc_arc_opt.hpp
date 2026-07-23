@@ -87,4 +87,5 @@ class WBCArcOPT : public WBCInterface<JointTorqueVelocityPositionCommands> {
                     const Eigen::Vector3d& lin_vel,
                     const Eigen::Vector3d& ang_vel) override;
   WBCReturn GetJointCommand(JointTorqueVelocityPositionCommands& joint_command) override;
+  bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override;
 };

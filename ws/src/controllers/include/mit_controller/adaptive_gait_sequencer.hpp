@@ -32,6 +32,9 @@ class AdaptiveGaitSequencer : public GaitSequencerInterface {
   void GetGaitState(interfaces::msg::GaitState& state) override;
   void UpdateModel(const ModelInterface& quad_model) override;
   GS_Type GetType() const override;
+  // Handles the adaptive_gait_sequencer.gait.* keys by forwarding to the AdaptiveGait setters
+  // (issue #2, gap G9); unknown keys return false so the host falls back to a full reload.
+  bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override;
 
   AdaptiveGait& Gait();
 

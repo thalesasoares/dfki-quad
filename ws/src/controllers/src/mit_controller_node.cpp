@@ -2,7 +2,6 @@
 
 MITController::MITController(const std::string &nodeName)
     : Node(nodeName),
-      last_gait_sequence_mode_(GaitSequence::KEEP),
       first_quad_state_received_(false),
       quad_model_(*this) {
   this->declare_parameter("initial_height", rclcpp::ParameterType::PARAMETER_DOUBLE);
@@ -311,86 +310,36 @@ MITController::MITController(const std::string &nodeName)
                                                                                                         &param_event) {
     bool gait_update = false;
     for (const auto &param : param_event.changed_parameters) {
+      // The host is a pure router: it hands each changed parameter to the owning stage through the
+      // SetParameter contract (issue #2) and never needs the concrete stage type. A stage returning
+      // false means it did not recognise the key; the host then warns, or for gait parameters falls
+      // back to reloading the gait sequencer from scratch (the previous behaviour).
       if (param.name.find("gait") != std::string::npos) {
-        if ((param.name.find("adaptive_gait_sequencer.gait") != std::string::npos)
-            && (dynamic_cast<AdaptiveGaitSequencer *>(gs_.get()))) {
-          auto ad_gs = dynamic_cast<AdaptiveGaitSequencer *>(gs_.get());
-          AdaptiveGait &gait = ad_gs->Gait();
-          if (param.name == "adaptive_gait_sequencer.gait.phase_offset") {
-            auto po = this->get_parameter("adaptive_gait_sequencer.gait.phase_offset").as_double_array();
-            gait.set_offset(to_array<N_LEGS>(po));
-          } else if (param.name == "adaptive_gait_sequencer.gait.swing_time") {
-            gait.set_swing_time(this->get_parameter("adaptive_gait_sequencer.gait.swing_time").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.filter_size") {
-            gait.set_filter_size(this->get_parameter("adaptive_gait_sequencer.gait.filter_size").as_int());
-          } else if (param.name == "adaptive_gait_sequencer.gait.zero_velocity_threshold") {
-            gait.set_zero_velocity_threshold(
-                this->get_parameter("adaptive_gait_sequencer.gait.zero_velocity_threshold").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.switch_offsets") {
-            gait.set_offset_switch(this->get_parameter("adaptive_gait_sequencer.gait.switch_offsets").as_bool());
-          } else if (param.name == "adaptive_gait_sequencer.gait.gait_change_froude") {
-            gait.set_gait_change_froude(
-                to_array<2>(this->get_parameter("adaptive_gait_sequencer.gait.gait_change_froude").as_double_array()));
-          } else if (param.name == "adaptive_gait_sequencer.gait.standing_foot_position_threshold") {
-            gait.set_standing_foot_position_threshold(
-                this->get_parameter("adaptive_gait_sequencer.gait.standing_foot_position_threshold").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.min_v_cmd_factor") {
-            gait.set_min_v_cmd_factor(this->get_parameter("adaptive_gait_sequencer.gait.min_v_cmd_factor").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.max_correction_cycles") {
-            gait.set_max_correction_cycles(
-                this->get_parameter("adaptive_gait_sequencer.gait.max_correction_cycles").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.correct_all") {
-            gait.set_correct_all(this->get_parameter("adaptive_gait_sequencer.gait.correct_all").as_bool());
-          } else if (param.name == "adaptive_gait_sequencer.gait.correction_period") {
-            gait.set_correction_period(
-                this->get_parameter("adaptive_gait_sequencer.gait.correction_period").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.disturbance_correction") {
-            gait.set_disturbance_correction(
-                this->get_parameter("adaptive_gait_sequencer.gait.disturbance_correction").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.min_v") {
-            gait.set_min_v(this->get_parameter("adaptive_gait_sequencer.gait.min_v").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.offset_delay") {
-            gait.set_offset_delay(this->get_parameter("adaptive_gait_sequencer.gait.offset_delay").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.max_stride_length") {
-            gait.set_max_stride_length(
-                this->get_parameter("adaptive_gait_sequencer.gait.max_stride_length").as_double());
-          }
-        } else {
+        gait_sequencer_lock_.lock();
+        bool applied = gs_->SetParameter(param.name, rclcpp::ParameterValue(param.value));
+        gait_sequencer_lock_.unlock();
+        if (!applied) {
           gait_update = true;
         }
-      } else if (param.name == "mpc_state_weights_stand") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc state weights stand");
-        mpc_lock_.lock();
-        state_weights_stand_ =
-            Eigen::Map<const Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1>>(param.value.double_array_value.data());
-        if (last_gait_sequence_mode_ == GaitSequence::KEEP) {
-          reinterpret_cast<MPC *>(mpc_.get())->SetStateWeights(state_weights_stand_);
+      } else if (param.name.rfind("mpc_", 0) == 0) {
+        std::lock_guard<std::mutex> lock(mpc_lock_);
+        if (!mpc_->SetParameter(param.name, rclcpp::ParameterValue(param.value))) {
+          RCLCPP_WARN(this->get_logger(), "Changing parameter %s is not yet suported", param.name.c_str());
+          continue;
         }
-        mpc_lock_.unlock();
-      } else if (param.name == "mpc_state_weights_move") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc state weights move");
-        mpc_lock_.lock();
-        state_weights_move_ =
-            Eigen::Map<const Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1>>(param.value.double_array_value.data());
-        if (last_gait_sequence_mode_ == GaitSequence::MOVE) {
-          reinterpret_cast<MPC *>(mpc_.get())->SetStateWeights(state_weights_move_);
+      } else if (param.name.rfind("slc_", 0) == 0
+                 || param.name == "maximum_swing_leg_progress_to_update_target") {
+        std::lock_guard<std::mutex> lock(slc_lock_);
+        if (!slc_->SetParameter(param.name, rclcpp::ParameterValue(param.value))) {
+          RCLCPP_WARN(this->get_logger(), "Changing parameter %s is not yet suported", param.name.c_str());
+          continue;
         }
-        mpc_lock_.unlock();
-      } else if (param.name == "mpc_alpha") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc input weights");
-        mpc_lock_.lock();
-        reinterpret_cast<MPC *>(mpc_.get())->SetInputWeights(param.value.double_value);
-        mpc_lock_.unlock();
-      } else if (param.name == "mpc_fmax") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc fmax");
-        mpc_lock_.lock();
-        reinterpret_cast<MPC *>(mpc_.get())->SetFmax(param.value.double_value);
-        mpc_lock_.unlock();
-      } else if (param.name == "mpc_mu") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc mu");
-        mpc_lock_.lock();
-        reinterpret_cast<MPC *>(mpc_.get())->SetMu(param.value.double_value);
-        mpc_lock_.unlock();
+      } else if (param.name.rfind("wbc.", 0) == 0) {
+        std::lock_guard<std::mutex> lock(wbc_lock_);
+        if (!wbc_->SetParameter(param.name, rclcpp::ParameterValue(param.value))) {
+          RCLCPP_WARN(this->get_logger(), "Changing parameter %s is not yet suported", param.name.c_str());
+          continue;
+        }
       } else if (param.name
                  == "cartesian_joint_control_gains.swing_Kp") {  // TODO: syncronisation, maybe use atomic vars?
         cartesian_joint_control_swing_Kp_ = Eigen::Map<const Eigen::Vector3d>(param.value.double_array_value.data());
@@ -434,43 +383,6 @@ MITController::MITController(const std::string &nodeName)
         use_model_adaptation_ = param.value.bool_value;
       } else if (param.name == "late_contact_reschedule_swing_phase") {
         late_contact_reschedule_swing_phase_ = param.value.bool_value;
-      } else if (param.name == "wbc.inverse_dynamics.foot_position_based_on_target_height") {
-        if (typeid(wbc_.get()) == typeid(InverseDynamics)) {
-          wbc_lock_.lock();
-          reinterpret_cast<InverseDynamics *>(wbc_.get())->setFootPositionBasedOnTargetHeight(param.value.bool_value);
-          wbc_lock_.unlock();
-        }
-      } else if (param.name == "wbc.inverse_dynamics.target_velocity_blend") {
-        if (typeid(wbc_.get()) == typeid(InverseDynamics)) {
-          wbc_lock_.lock();
-          reinterpret_cast<InverseDynamics *>(wbc_.get())->setTargetVelocityBlend(param.value.double_value);
-          wbc_lock_.unlock();
-        }
-      } else if (param.name == "wbc.inverse_dynamics.foot_position_based_on_target_orientation") {
-        if (typeid(wbc_.get()) == typeid(InverseDynamics)) {
-          wbc_lock_.lock();
-          reinterpret_cast<InverseDynamics *>(wbc_.get())
-              ->setFootPositionBasedOnTargetOrientation(param.value.bool_value);
-          wbc_lock_.unlock();
-        }
-      } else if (param.name == "slc_swing_height") {
-        slc_lock_.lock();
-        reinterpret_cast<SwingLegController *>(slc_.get())->SetSwingHeight(param.value.double_value);
-        slc_lock_.unlock();
-      } else if (param.name == "slc_world_blend") {
-        slc_lock_.lock();
-        reinterpret_cast<SwingLegController *>(slc_.get())->SetWorldBlend(param.value.double_value);
-        slc_lock_.unlock();
-      } else if (param.name == "wbc.inverse_dynamics.transformation_filter_size") {
-        wbc_lock_.lock();
-        reinterpret_cast<InverseDynamics *>(wbc_.get())
-            ->setFootPositionBasedOnTargetOrientation(param.value.integer_value);
-        wbc_lock_.unlock();
-      } else if (param.name == "maximum_swing_leg_progress_to_update_target") {
-        slc_lock_.lock();
-        reinterpret_cast<SwingLegController *>(slc_.get())
-            ->SetMaximumSwingProgressToUpdateTarget(param.value.double_value);
-        slc_lock_.unlock();
       } else if (param.name == "raibert.z_on_plane") {
         gait_update = true;
       } else if (param.name == "raibert.k") {
@@ -540,6 +452,7 @@ MITController::MITController(const std::string &nodeName)
   }
   mpc_ = std::make_unique<MPC>(this->get_parameter("mpc_alpha").as_double(),
                                state_weights_stand_,
+                               state_weights_move_,
                                this->get_parameter("mpc_mu").as_double(),
                                this->get_parameter("mpc_fmin").as_double(),
                                this->get_parameter("mpc_fmax").as_double(),
@@ -594,41 +507,45 @@ MITController::MITController(const std::string &nodeName)
       std::make_unique<QuadModelPino>(quad_model_),
       std::make_unique<QuadState>(quad_state_));
 
-  WBCType *wbc_ptr;
-
-  if constexpr (USE_WBC) {
-    std::string wbc_solver_name;
-    std::string wbc_scene_name;
-    wbc_solver_name = this->get_parameter("wbc.arc_opt.solver").as_string();
-    wbc_scene_name = this->get_parameter("wbc.arc_opt.scene").as_string();
-    wbc_ptr = reinterpret_cast<WBCType *>(new WBCArcOPT(
-        std::make_unique<QuadState>(quad_state_),
-        wbc_solver_name,
-        wbc_scene_name,
-        this->get_parameter("wbc.arc_opt.model_urdf").as_string(),
-        to_array<ModelInterface::N_LEGS>(this->get_parameter("wbc.arc_opt.feet_names").as_string_array()),
-        to_array<ModelInterface::NUM_JOINTS>(this->get_parameter("wbc.arc_opt.joint_names").as_string_array()),
-        this->get_parameter("wbc.arc_opt.mu").as_double(),
-        as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_weight").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.foot_pose_weight").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.foot_force_weight").as_double_array()),
-        as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_Kp").as_double_array()),
-        as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_Kd").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_Kp").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_Kd").as_double_array()),
-        as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_saturation").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_saturation").as_double_array()),
-        this->get_parameter("wbc_solver_tolerances").as_double()));
-  } else {
-    wbc_ptr = reinterpret_cast<WBCType *>(new InverseDynamics(
-        std::make_unique<QuadModelPino>(quad_model_),
-        std::make_unique<QuadState>(quad_state_),
-        this->get_parameter("wbc.inverse_dynamics.foot_position_based_on_target_height").as_bool(),
-        this->get_parameter("wbc.inverse_dynamics.foot_position_based_on_target_orientation").as_bool(),
-        this->get_parameter("wbc.inverse_dynamics.transformation_filter_size").as_int(),
-        this->get_parameter("wbc.inverse_dynamics.target_velocity_blend").as_double()));
-  }
-  wbc_ = std::unique_ptr<WBCType>(wbc_ptr);
+  // WBCType is fixed at compile time by USE_WBC. A plain if constexpr here would not remove the
+  // casts: in this non-template constructor the discarded branch is still type-checked, so the
+  // concrete WBC would not convert to WBCType* - which is why the previous code needed an unchecked
+  // pointer cast (issue #2, gap G8-lite). Constructing inside a generic lambda makes the branch
+  // dependent on a template parameter, so only the matching construction is compiled and the upcast
+  // to WBCType* is implicit.
+  auto create_wbc = [this](auto use_wbc_tag) -> std::unique_ptr<WBCType> {
+    if constexpr (decltype(use_wbc_tag)::value) {
+      const std::string wbc_solver_name = this->get_parameter("wbc.arc_opt.solver").as_string();
+      const std::string wbc_scene_name = this->get_parameter("wbc.arc_opt.scene").as_string();
+      return std::unique_ptr<WBCType>(new WBCArcOPT(
+          std::make_unique<QuadState>(quad_state_),
+          wbc_solver_name,
+          wbc_scene_name,
+          this->get_parameter("wbc.arc_opt.model_urdf").as_string(),
+          to_array<ModelInterface::N_LEGS>(this->get_parameter("wbc.arc_opt.feet_names").as_string_array()),
+          to_array<ModelInterface::NUM_JOINTS>(this->get_parameter("wbc.arc_opt.joint_names").as_string_array()),
+          this->get_parameter("wbc.arc_opt.mu").as_double(),
+          as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_weight").as_double_array()),
+          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.foot_pose_weight").as_double_array()),
+          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.foot_force_weight").as_double_array()),
+          as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_Kp").as_double_array()),
+          as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_Kd").as_double_array()),
+          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_Kp").as_double_array()),
+          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_Kd").as_double_array()),
+          as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_saturation").as_double_array()),
+          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_saturation").as_double_array()),
+          this->get_parameter("wbc_solver_tolerances").as_double()));
+    } else {
+      return std::unique_ptr<WBCType>(new InverseDynamics(
+          std::make_unique<QuadModelPino>(quad_model_),
+          std::make_unique<QuadState>(quad_state_),
+          this->get_parameter("wbc.inverse_dynamics.foot_position_based_on_target_height").as_bool(),
+          this->get_parameter("wbc.inverse_dynamics.foot_position_based_on_target_orientation").as_bool(),
+          this->get_parameter("wbc.inverse_dynamics.transformation_filter_size").as_int(),
+          this->get_parameter("wbc.inverse_dynamics.target_velocity_blend").as_double()));
+    }
+  };
+  wbc_ = create_wbc(std::bool_constant<USE_WBC>{});
 
   // Now change modus of le driver acording to this controller
   // comment next paragraph if you want to use controller on bag data
@@ -817,24 +734,11 @@ void MITController::MPCLoopCallback() {
   gs_->GetGaitSequence(gait_sequence_temp);
   mpc_->UpdateGaitSequence(gait_sequence_temp);
 
-  if (last_gait_sequence_mode_ != gait_sequence_temp.sequence_mode) {
-    RCLCPP_DEBUG(this->get_logger(), "Changing MPC weights because sequence mode changed");
-    switch (gait_sequence_temp.sequence_mode) {
-      case GaitSequence::KEEP:
-        reinterpret_cast<MPC *>(mpc_.get())->SetStateWeights(state_weights_stand_);
-        if (PUBLISH_HEARTBEAT) {
-          controller_heartbeat_.keep_pose_active = true;
-        }
-        break;  // TODO: this and next might have internal doubled
-                // operations with target set
-      case GaitSequence::MOVE:
-        reinterpret_cast<MPC *>(mpc_.get())->SetStateWeights(state_weights_move_);
-        if (PUBLISH_HEARTBEAT) {
-          controller_heartbeat_.keep_pose_active = false;
-        }
-        break;
-    }
-    last_gait_sequence_mode_ = gait_sequence_temp.sequence_mode;
+  // The MPC now switches its own KEEP<->MOVE cost weights inside UpdateGaitSequence (issue #2, gap
+  // G1), so the host no longer reaches into the concrete MPC here. It still mirrors the mode into
+  // the heartbeat for diagnostics.
+  if (PUBLISH_HEARTBEAT) {
+    controller_heartbeat_.keep_pose_active = (gait_sequence_temp.sequence_mode == GaitSequence::KEEP);
   }
 
   static SolverInformation solver_info;
@@ -1247,33 +1151,63 @@ void MITController::ControlLoopCallback() {
   wbc_->UpdateFootContact(gait);
   wbc_->UpdateWrenches(wrenches);
 
+  // WBCType is fixed at compile time (WBCInterface<CartesianCommands> or
+  // WBCInterface<JointTorqueVelocityPositionCommands>), so only the command type matching this build
+  // can be produced. The previous code unchecked-cast the WBC to the other instantiation, which
+  // was undefined behaviour for a mismatched leg_control_mode_ (issue #2, gap G8-lite). The generic
+  // lambda below is a templated context, so its if constexpr discards the branch that does not match
+  // WBCType: only the compatible command path is compiled, and it calls the interface directly. A
+  // mismatch between the runtime leg_control_mode_ and the compiled command type is now a logged
+  // error instead of silent UB. Fully de-templating WBCInterface for a runtime command-type choice
+  // remains issue #13's scope.
   static WBCReturn wbc_return;
-  switch (leg_control_mode_) {
-    case CARTESIAN_JOINT_CONTROL:
-      [[fallthrough]];
-    case CARTESIAN_STIFFNESS_CONTROL: {
-      leg_cmd_.header.stamp = this->get_clock()->now();
-      CartesianCommands commands;
-      wbc_return = reinterpret_cast<WBCInterface<CartesianCommands> *>(wbc_.get())->GetJointCommand(commands);
-      assign(commands.position, leg_cmd_.ee_pos);
-      assign(commands.velocity, leg_cmd_.ee_vel);
-      assign(commands.force, leg_cmd_.ee_force);
-      leg_cmd_publisher_->publish(leg_cmd_);
-    } break;
-    case JOINT_TORQUE_CONTROL:
-      [[fallthrough]];
-    case JOINT_CONTROL: {
-      leg_joint_cmd_.header.stamp = this->get_clock()->now();
-      JointTorqueVelocityPositionCommands commands;
-      wbc_return =
-          reinterpret_cast<WBCInterface<JointTorqueVelocityPositionCommands> *>(wbc_.get())->GetJointCommand(commands);
-      assign(commands.velocity, leg_joint_cmd_.velocity);
-      assign(commands.position, leg_joint_cmd_.position);
-      assign(commands.torque, leg_joint_cmd_.effort);
-      leg_joint_cmd_publisher_->publish(leg_joint_cmd_);
-      break;
+  auto solve_and_publish = [this](auto *wbc) -> WBCReturn {
+    using CommandType = typename std::remove_pointer_t<decltype(wbc)>::JOINT_COMMAND_TYPE;
+    if constexpr (std::is_same_v<CommandType, CartesianCommands>) {
+      switch (leg_control_mode_) {
+        case CARTESIAN_JOINT_CONTROL:
+          [[fallthrough]];
+        case CARTESIAN_STIFFNESS_CONTROL: {
+          leg_cmd_.header.stamp = this->get_clock()->now();
+          CartesianCommands commands;
+          WBCReturn ret = wbc->GetJointCommand(commands);
+          assign(commands.position, leg_cmd_.ee_pos);
+          assign(commands.velocity, leg_cmd_.ee_vel);
+          assign(commands.force, leg_cmd_.ee_force);
+          leg_cmd_publisher_->publish(leg_cmd_);
+          return ret;
+        }
+        default:
+          RCLCPP_ERROR(this->get_logger(),
+                       "leg_control_mode_ %d needs a joint-command WBC, but this build uses a "
+                       "cartesian-command WBC",
+                       static_cast<int>(leg_control_mode_));
+          return {false, 0.0, 0.0};
+      }
+    } else {
+      switch (leg_control_mode_) {
+        case JOINT_TORQUE_CONTROL:
+          [[fallthrough]];
+        case JOINT_CONTROL: {
+          leg_joint_cmd_.header.stamp = this->get_clock()->now();
+          JointTorqueVelocityPositionCommands commands;
+          WBCReturn ret = wbc->GetJointCommand(commands);
+          assign(commands.velocity, leg_joint_cmd_.velocity);
+          assign(commands.position, leg_joint_cmd_.position);
+          assign(commands.torque, leg_joint_cmd_.effort);
+          leg_joint_cmd_publisher_->publish(leg_joint_cmd_);
+          return ret;
+        }
+        default:
+          RCLCPP_ERROR(this->get_logger(),
+                       "leg_control_mode_ %d needs a cartesian-command WBC, but this build uses a "
+                       "joint-command WBC",
+                       static_cast<int>(leg_control_mode_));
+          return {false, 0.0, 0.0};
+      }
     }
-  }
+  };
+  wbc_return = solve_and_publish(wbc_.get());
   auto wbc_end_time = std::chrono::high_resolution_clock::now();
   wbc_solve_time = std::chrono::duration_cast<std::chrono::duration<double>>(wbc_end_time - wbc_start_time).count();
   wbc_lock_.unlock();

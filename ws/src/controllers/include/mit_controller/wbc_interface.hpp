@@ -1,5 +1,9 @@
 #pragma once
 
+#include <rclcpp/parameter_value.hpp>
+
+#include <string>
+
 #include "common/model_interface.hpp"
 #include "feet_targets.hpp"
 #include "gait_sequence.hpp"
@@ -75,6 +79,16 @@ class WBCInterface {
    * @return success flag and solver timings
    */
   virtual WBCReturn GetJointCommand(JointCommandType &joint_command) = 0;
+  /**
+   * Applies a runtime parameter to this stage.
+   * Called from the host parameter-event callback with the stage's mutex (wbc_lock_) held, never
+   * from the control loops. An implementation that recognises no runtime parameters returns false.
+   *
+   * @param name the full ROS parameter name (e.g. "wbc.inverse_dynamics.target_velocity_blend")
+   * @param value the new parameter value
+   * @return true if the key was recognised and applied, false otherwise (the host logs a warning)
+   */
+  virtual bool SetParameter(const std::string &name, const rclcpp::ParameterValue &value) = 0;
 
   virtual ~WBCInterface() = default;
 };

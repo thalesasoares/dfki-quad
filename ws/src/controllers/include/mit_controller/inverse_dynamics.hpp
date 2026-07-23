@@ -50,4 +50,5 @@ class InverseDynamics : public WBCInterface<CartesianCommands> {
                     const Eigen::Vector3d& position,
                     const Eigen::Vector3d& lin_vel,
                     const Eigen::Vector3d& ang_vel) override;
+  bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override;
 };

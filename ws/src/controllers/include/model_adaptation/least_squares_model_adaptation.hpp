@@ -20,6 +20,10 @@ class LeastSquaresModelAdaptation : public ModelAdaptationInterface {
   Eigen::Vector<double, NUM_PARAMS> GetDelta() const override;
   Eigen::Vector<double, 6> GetTotalForceTorque() const override;
   Eigen::Vector<double, NUM_PARAMS> GetSV() const override;
+  // No runtime-tunable parameters.
+  bool SetParameter(const std::string& /*name*/, const rclcpp::ParameterValue& /*value*/) override {
+    return false;
+  }
 
  private:
   void CalcMeasurementVector(const std::array<Eigen::Vector3d, ModelInterface::N_LEGS>& contact_forces,

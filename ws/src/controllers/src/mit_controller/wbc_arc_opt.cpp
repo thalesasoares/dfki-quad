@@ -393,3 +393,10 @@ WBCReturn WBCArcOPT::GetJointCommand(JointTorqueVelocityPositionCommands& joint_
       std::chrono::duration_cast<std::chrono::duration<double>>(wbc_solve_toc - wbc_solve_tic).count(),
   };
 }
+
+bool WBCArcOPT::SetParameter(const std::string& /*name*/, const rclcpp::ParameterValue& /*value*/) {
+  // WBCArcOPT (the Go2 whole-body controller) has no runtime-tunable parameters today. Returning
+  // false lets the host log that the key was not applied, matching the previous behaviour where the
+  // wbc.arc_opt.* keys were construction-only.
+  return false;
+}

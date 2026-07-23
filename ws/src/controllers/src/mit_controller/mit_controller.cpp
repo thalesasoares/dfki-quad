@@ -39,6 +39,7 @@ int main() {
   double fmax = 200;
   MPC mpc(alpha,
           state_weight,
+          state_weight,  // same weights for stand and move in this standalone harness
           mu,
           fmin,
           fmax,

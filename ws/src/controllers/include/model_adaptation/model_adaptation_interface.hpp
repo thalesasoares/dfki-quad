@@ -1,4 +1,8 @@
 #pragma once
+#include <rclcpp/parameter_value.hpp>
+
+#include <string>
+
 #include "common/model_interface.hpp"
 #include "common/state_interface.hpp"
 #include "gait_sequence.hpp"
@@ -40,6 +44,16 @@ class ModelAdaptationInterface {
   virtual Eigen::Vector<double, 6> GetTotalForceTorque() const = 0;
   /** Singular values of the estimation problem, for diagnostics. Must be side effect free. */
   virtual Eigen::Vector<double, NUM_PARAMS> GetSV() const = 0;
+  /**
+   * Applies a runtime parameter to this stage.
+   * Called from the host parameter-event callback, never from the control loops. An implementation
+   * that recognises no runtime parameters returns false (the host logs a warning).
+   *
+   * @param name the full ROS parameter name
+   * @param value the new parameter value
+   * @return true if the key was recognised and applied, false otherwise
+   */
+  virtual bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) = 0;
 
   virtual ~ModelAdaptationInterface() = default;
 };

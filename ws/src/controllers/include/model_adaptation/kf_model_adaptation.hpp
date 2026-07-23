@@ -23,6 +23,10 @@ class KFModelAdaptation : public ModelAdaptationInterface {
   Eigen::Matrix<double, NUM_PARAMS, NUM_PARAMS> GetParameterCovariance() const override;
   Eigen::Vector<double, 6> GetTotalForceTorque() const override;
   Eigen::Vector<double, NUM_PARAMS> GetSV() const override;
+  // No runtime-tunable parameters.
+  bool SetParameter(const std::string& /*name*/, const rclcpp::ParameterValue& /*value*/) override {
+    return false;
+  }
 
  private:
   std::unique_ptr<StateInterface> state_;
