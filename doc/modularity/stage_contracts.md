@@ -1,7 +1,10 @@
 # Control Pipeline Stage Contracts
 
-**Status:** frozen as of M1.1 (issue #1); host→concrete casts removed in M1.2 (issue #2) ·
-**Applies to:** `ws/src/controllers`
+**Status:** frozen as of M1.1 (issue #1); host→concrete casts removed in M1.2 (issue #2); shared
+data types exported in M1.3 (issue #3) ·
+**Applies to:** `ws/src/controllers` ·
+**Companion document:** [`pipeline_types.md`](pipeline_types.md) — the data the methods below
+exchange, and the include path plugins compile against
 
 This document is the reference contract for the five control-pipeline stages that
 `mit_controller_node` hosts. It records, for each stage, the methods an implementation **must**
@@ -54,7 +57,9 @@ event-driven rather than periodic (§4.5).
 
 ## 3. Timing and threading
 
-All periods are `static constexpr` in `mit_controller/mit_controller_params.hpp`. `main()` runs a
+All periods are `static constexpr` in `mit_controller/pipeline_constants.hpp` (moved there from
+`mit_controller_params.hpp` in M1.3 so plugins can see them; the latter still includes the former,
+so in-package code is unaffected). `main()` runs a
 `rclcpp::executors::MultiThreadedExecutor` with **4 threads**; each loop below owns a **mutually
 exclusive callback group**, so a given stage is never re-entered concurrently, but different stages
 do run concurrently on different threads.
@@ -70,7 +75,8 @@ do run concurrently on different threads.
 Other shared constants a stage implementation may rely on: `N_LEGS = 4`,
 `N_JOINTS_PER_LEG = 3`, `GAIT_SEQUENCE_SIZE = 100`, `MPC_PREDICTION_HORIZON = 10`,
 `MPC_DT = 50 ms`. The gait sequence therefore spans 100 × 50 ms = 5 s of plan, and the MPC horizon
-covers 10 × 50 ms = 500 ms.
+covers 10 × 50 ms = 500 ms. The full table is in
+[`pipeline_types.md`](pipeline_types.md) §3.
 
 ### Start-up ordering
 
@@ -359,7 +365,10 @@ Not part of the five frozen contracts, but relevant to the modularity work:
   (`get_t_stance(leg)`), already well-formed. Used *inside* gait sequencer implementations, not by
   the host. No changes needed.
 - **`StateInterface` / `ModelInterface`** (`common/`) — the shared data types every stage consumes.
-  Issue #3 (M1.3) covers exposing these as a stable package surface.
+  Already installed and exported by the `common` package. The five *pipeline* types
+  (`Target`, `GaitSequence`, `WrenchSequence`, `MPCPrediction`, `FeetTargets`) are exported from
+  `controllers` as of M1.3 — see [`pipeline_types.md`](pipeline_types.md). The stage **interface**
+  headers are not exported yet; that is M2.1 (issue #6).
 - **The contact FSM has no interface at all.** `SWING / STANCE / EARLY_CONTACT / LATE_CONTACT /
   LOST_CONTACT` is declared as a private enum on `MITController`
   (`mit_controller_node.hpp:50`) and implemented inline in `ControlLoopCallback`
@@ -376,7 +385,7 @@ Not part of the five frozen contracts, but relevant to the modularity work:
 | #24 | [Meta] Modular Go2 control | Parent |
 | #1 | [M1.1] Audit and freeze stage interface APIs | **This document** |
 | #2 | [M1.2] Remove host→concrete casts | Consumes §5 (G1, G2, G3, G5, G7, G9) and §6 |
-| #3 | [M1.3] Shared pipeline data types package surface | Consumes §7 |
+| #3 | [M1.3] Shared pipeline data types package surface | Consumed §7 — **done**, see [`pipeline_types.md`](pipeline_types.md) |
 | #4 | [M1.4] Define `ContactLogicInterface` | Consumes §7 |
 | #5 | [M1.5] Contract tests / compile smoke | Asserts §4 method tables |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns G6, G10 |
