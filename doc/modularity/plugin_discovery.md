@@ -1,0 +1,141 @@
+# Plugin Discovery: dependency, exported surface, description schema
+
+**Status:** added in M2.1 (issue #6) ·
+**Applies to:** `ws/src/controllers` ·
+**Companion documents:** [`plugin_lifecycle.md`](plugin_lifecycle.md) — the `StagePlugin` lifecycle ·
+[`stage_contracts.md`](stage_contracts.md) — the frozen stage APIs ·
+[`pipeline_types.md`](pipeline_types.md) — the exported data types
+
+[`plugin_lifecycle.md`](plugin_lifecycle.md) specified *how a stage comes to life* through
+`pluginlib`. This document is the M2.1 groundwork that makes that loadable at all: the `pluginlib`
+dependency, the stage interface headers joining the exported surface, and the **plugin description
+schema** — the XML files and base-class-type strings that `pluginlib::ClassLoader` discovers.
+
+M2.1 is deliberately *foundation only*. It ships **no plugin classes**: the stock wrappers are M2.3
+(issue #8). What it fixes in place is the vocabulary every later milestone builds on.
+
+## 1. The dependency
+
+`controllers` now declares `pluginlib` (`package.xml`, `find_package(pluginlib REQUIRED)`). The
+package `ament_export_dependencies(... rclcpp interfaces pluginlib)`, so an out-of-package stage
+plugin that does `find_package(controllers)` inherits them transitively instead of re-listing them —
+the exported interface headers include `rclcpp/parameter_value.hpp`, `rclcpp/time.hpp` and
+`interfaces/msg/gait_state.hpp`, and `StagePlugin` is a `pluginlib` base.
+
+## 2. The exported surface
+
+The frozen stage interface headers join the installed surface alongside the M1.3 pipeline types (see
+[`pipeline_types.md`](pipeline_types.md) §6, which scheduled this for M2.1):
+
+| Installed header | Destination |
+|---|---|
+| `gait_sequencer_interface.hpp` (+ `gait_sequencer_types.hpp`) | `include/mit_controller/` |
+| `mpc_interface.hpp` | `include/mit_controller/` |
+| `swing_leg_controller_interface.hpp` | `include/mit_controller/` |
+| `wbc_interface.hpp` (+ `joint_commands.hpp`) | `include/mit_controller/` |
+| `contact_logic_interface.hpp` | `include/mit_controller/` |
+| `stage_plugin.hpp` | `include/mit_controller/` |
+| `model_adaptation_interface.hpp` | `include/model_adaptation/` |
+
+It is still an explicit allowlist, not `install(DIRECTORY include/)`: node and algorithm internals
+stay private so "stable surface" keeps meaning something.
+
+Three include-path fixes were needed to make these headers self-contained for an out-of-package
+consumer (all behaviour-neutral, include lines only):
+
+1. `mpc_interface.hpp` and `gait_sequencer_interface.hpp` included `potato_sim/potato_model.hpp`, a
+   node-internal header. The include was **dead** — neither header (nor any exported header) uses
+   `BrickModel`/`BrickState` — so it was removed. This closes follow-up #2 in
+   [`pipeline_types.md`](pipeline_types.md) §7.
+2. `model_adaptation_interface.hpp` included `"gait_sequence.hpp"` unqualified, which only resolved
+   via the in-tree `include_directories(include/mit_controller)`. Qualified to
+   `"mit_controller/gait_sequence.hpp"` so it resolves against the exported `include/` root once
+   installed to `include/model_adaptation/`.
+3. `joint_commands.hpp` included the **host-only** `mit_controller_params.hpp` (which carries the
+   `PUBLISH_*` switches and `USE_WBC`, itself gated on the `ROBOT_MODEL` compile definition only this
+   package's targets set) purely for the `N_LEGS`/`N_JOINTS_PER_LEG` constants. Retargeted to
+   `mit_controller/pipeline_constants.hpp` (the M1.3 split), so no host-only header leaks onto the
+   surface through the WBC interface.
+
+`src/tools/pipeline_types_surface_check.cpp` — compiled with an export-only include path — now
+includes all of these too, so any regression to their self-containment fails the ordinary
+`colcon build`.
+
+## 3. The plugin description schema
+
+One description file per stage base class, under `plugins/`:
+
+| File | `base_class_type` |
+|---|---|
+| `gait_sequencer_plugins.xml` | `StagePlugin<GaitSequencerInterface>` |
+| `mpc_plugins.xml` | `StagePlugin<MPCInterface>` |
+| `slc_plugins.xml` | `StagePlugin<SwingLegControllerInterface>` |
+| `wbc_plugins.xml` | `StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>` |
+| `model_adaptation_plugins.xml` | `StagePlugin<ModelAdaptationInterface>` |
+| `contact_logic_plugins.xml` | `StagePlugin<ContactLogicInterface>` |
+
+**These base-class-type strings are the schema.** M2.2's loader helper and M2.3's wrapper
+`PLUGINLIB_EXPORT_CLASS` calls must use them verbatim. Changing one requires updating this file, the
+XML, and the loader in the same PR — the same rule [`plugin_lifecycle.md`](plugin_lifecycle.md) §1
+applies to the lifecycle.
+
+Design decisions:
+
+- **One file per stage base, not one combined file.** M2.3 fills them in one stage at a time
+  (reviewable per-stage diffs); M3.1 adds the contact class without touching the others; and #13
+  (M3.2) reworks **only** `wbc_plugins.xml` when the WBC interface is de-templated
+  ([`plugin_lifecycle.md`](plugin_lifecycle.md) §6). Isolating the WBC declaration now contains that
+  future churn.
+- **Empty class lists in M2.1.** Each file is a `<class_libraries>` root documenting its base string
+  and the suggested stock IDs, with no `<library>`/`<class>` entries yet. `pluginlib` accepts this
+  (a `class_libraries` root with zero `library` children → zero declared classes), and it commits to
+  no shared-library layout — that is an M2.3 decision. The `type:` key vocabulary is M2.5's (#10);
+  these files are naming-agnostic.
+- **The contact file is defined now.** `ContactLogicInterface` was frozen in M1.4 and
+  `StagePlugin<ContactLogicInterface>` already compiles, so issue #6's "(and Contact when ready)" is
+  satisfiable today. M3.1 (#12) becomes purely additive.
+- **The WBC base is the Go2 instantiation.** `WBCInterface` is still a class template (gap G8), so
+  the M2 Go2 product path registers the `JointTorqueVelocityPositionCommands` instantiation; the
+  ULab/Cartesian path stays on the compile-time factory until #13
+  ([`plugin_lifecycle.md`](plugin_lifecycle.md) §6).
+
+Each file is registered with `pluginlib_export_plugin_description_file(controllers plugins/<f>.xml)`,
+which installs it to `share/controllers/plugins/` and registers the
+`controllers__pluginlib__plugin` ament-index resource `ClassLoader` reads for discovery.
+
+## 4. What guards it
+
+`test/test_plugin_discovery.cpp` (runs under `colcon test`):
+
+1. Asserts the `controllers__pluginlib__plugin` resource exists for package `controllers` and lists
+   all six description files — the real proof of "exports plugin XML correctly for discovery".
+2. Constructs a `pluginlib::ClassLoader` for each of the six stage bases from the exported header +
+   XML and asserts zero declared classes (M2.1 is schema-only). In M2.3 these assertions flip to
+   expecting the stock IDs, so the test grows with the milestone.
+
+Because the ament resource lives in the install space, the CMake target extends `AMENT_PREFIX_PATH`
+with `CMAKE_INSTALL_PREFIX` for the test process; under `colcon test` the package is already
+installed, so the resource is present.
+
+## 5. Performance
+
+M2.1 changes no compiled `.cpp`: the changes are dependency metadata, header installation, three
+behaviour-neutral include-line edits, XML data files, and a test. `mitcontrollernode`'s call graph,
+optimisation flags and binary behaviour are unchanged; removing the dead includes can only reduce
+compile time. `pluginlib` costs only at *load* time (library `dlopen` at bring-up), never in the
+control loops — and in M2.1 nothing is loaded yet. The performance discipline to carry forward:
+**M2.3** stock-plugin `.so`s must keep today's optimisation flags, and **M2.4** must keep calling
+stages through the existing `unique_ptr<Interface>` indirection (no new per-cycle indirection).
+
+## 6. Related issues
+
+| Issue | Title | Relationship |
+|---|---|---|
+| #24 | [Meta] Modular Go2 control | Parent |
+| #6 | [M2.1] pluginlib dependency and plugin description XML | **This document** |
+| #7 | [M2.2] Stage plugin base + loader helper | Consumes the base-class-type strings |
+| #8 | [M2.3] Wrap existing stages as stock plugins | Fills the `<class>` entries; flips the discovery test's expected count |
+| #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns the loaders; keeps per-cycle indirection unchanged |
+| #10 | [M2.5] YAML schema for stage selection | Owns the `type:` key vocabulary |
+| #12 | [M3.1] Extract contact FSM | Populates `contact_logic_plugins.xml` |
+| #13 | [M3.2] Runtime WBC / command-type profile | Reworks `wbc_plugins.xml` once the interface is de-templated |

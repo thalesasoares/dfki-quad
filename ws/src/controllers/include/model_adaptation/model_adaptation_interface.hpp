@@ -5,7 +5,10 @@
 
 #include "common/model_interface.hpp"
 #include "common/state_interface.hpp"
-#include "gait_sequence.hpp"
+// Qualified so the header resolves against the exported `include/` root once
+// installed to include/model_adaptation/, not just via the in-tree
+// include_directories(include/mit_controller) (issue #6, M2.1).
+#include "mit_controller/gait_sequence.hpp"
 
 class ModelAdaptationInterface {
  protected:

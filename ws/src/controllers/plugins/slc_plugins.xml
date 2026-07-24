@@ -1,0 +1,14 @@
+<!--
+  Swing-leg-controller stage plugins (issue #6, M2.1).
+
+  base_class_type: StagePlugin<SwingLegControllerInterface>
+    (mit_controller/stage_plugin.hpp + mit_controller/swing_leg_controller_interface.hpp)
+
+  Empty schema-only declaration; stock wrappers land in M2.3 (issue #8). Suggested
+  stock ID (issue #8): bezier_swing.
+
+  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
+  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+-->
+<class_libraries>
+</class_libraries>

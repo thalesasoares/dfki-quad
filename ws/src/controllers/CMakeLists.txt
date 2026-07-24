@@ -30,6 +30,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(interfaces REQUIRED)
+find_package(pluginlib REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
@@ -66,6 +67,22 @@ pkg_search_module(wbc-solvers-hpipm REQUIRED IMPORTED_TARGET wbc-solvers-hpipm)
 
 include_directories(include include/mit_controller src)
 
+# ##############################################################################
+# --- Stage plugin description schema (issue #6, M2.1) --- #
+# ##############################################################################
+# One plugin description file per stage base class. They install the XML and
+# register the `controllers__pluginlib__plugin` ament-index resource that
+# pluginlib::ClassLoader reads for discovery. The files are schema-only in M2.1
+# (no <class> entries yet); M2.3 (#8) fills the wrappers in, M3.1 (#12) adds the
+# contact class, and #13 reworks only wbc_plugins.xml. See
+# doc/modularity/plugin_discovery.md.
+pluginlib_export_plugin_description_file(controllers plugins/gait_sequencer_plugins.xml)
+pluginlib_export_plugin_description_file(controllers plugins/mpc_plugins.xml)
+pluginlib_export_plugin_description_file(controllers plugins/slc_plugins.xml)
+pluginlib_export_plugin_description_file(controllers plugins/wbc_plugins.xml)
+pluginlib_export_plugin_description_file(controllers plugins/model_adaptation_plugins.xml)
+pluginlib_export_plugin_description_file(controllers plugins/contact_logic_plugins.xml)
+
 if (BUILD_TESTING)
     find_package(ament_lint_auto REQUIRED)
     # the following line skips the linter which checks for copyrights comment the
@@ -101,6 +118,28 @@ if (BUILD_TESTING)
             include include/mit_controller test)
     ament_target_dependencies(test_stage_contracts common interfaces rclcpp Eigen3)
     target_compile_options(test_stage_contracts PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+    # ##########################################################################
+    # --- Plugin discovery smoke test (issue #6, M2.1) --- #
+    # ##########################################################################
+    # Verifies the six plugin description files are exported for pluginlib
+    # discovery (the controllers__pluginlib__plugin ament resource) and that a
+    # ClassLoader constructs for each stage base from the exported header + XML,
+    # reporting zero declared classes (M2.1 is schema-only; M2.3 flips the count).
+    #
+    # The ament resource is in the install space, so AMENT_PREFIX_PATH is extended
+    # with CMAKE_INSTALL_PREFIX for the test process. Under `colcon test` the
+    # package is already installed, so the resource is present. See
+    # doc/modularity/plugin_discovery.md.
+    find_package(ament_index_cpp REQUIRED)
+    ament_add_gtest(test_plugin_discovery
+            test/test_plugin_discovery.cpp
+            APPEND_ENV AMENT_PREFIX_PATH=${CMAKE_INSTALL_PREFIX})
+    target_include_directories(test_plugin_discovery PRIVATE
+            include include/mit_controller)
+    ament_target_dependencies(test_plugin_discovery
+            pluginlib ament_index_cpp common interfaces rclcpp Eigen3)
+    target_compile_options(test_plugin_discovery PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif ()
 
 
@@ -290,11 +329,14 @@ target_include_directories(
 # ##############################################################################
 # --- Shared pipeline type surface compile check --- #
 # ##############################################################################
-# Builds the exported pipeline type headers with a deliberately restricted
-# include path — `include/` plus the `common` and Eigen dependencies only, i.e.
+# Builds the exported pipeline type + stage interface headers with a deliberately
+# restricted include path — `include/` plus the declared dependencies only, i.e.
 # what an out-of-package stage plugin sees. This fails the build if a surface
 # header stops being self-contained or starts depending on node internals.
-# See doc/modularity/pipeline_types.md (issue #3, M1.3).
+# See doc/modularity/pipeline_types.md (issue #3, M1.3) and plugin_lifecycle.md
+# (issue #6, M2.1). rclcpp / interfaces joined the dependency list when the stage
+# interface headers (which include rclcpp/parameter_value.hpp, rclcpp/time.hpp and
+# interfaces/msg/gait_state.hpp) joined the surface.
 
 add_library(pipeline_types_surface_check OBJECT src/tools/pipeline_types_surface_check.cpp)
 
@@ -304,7 +346,7 @@ add_library(pipeline_types_surface_check OBJECT src/tools/pipeline_types_surface
 set_property(TARGET pipeline_types_surface_check
         PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-ament_target_dependencies(pipeline_types_surface_check common Eigen3)
+ament_target_dependencies(pipeline_types_surface_check common Eigen3 rclcpp interfaces)
 target_compile_options(pipeline_types_surface_check PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 # The M1.4 ContactLogicInterface compile check
@@ -360,8 +402,8 @@ install(DIRECTORY launch config trajectories DESTINATION share/${PROJECT_NAME}/)
 # The in-process data types the control pipeline stages exchange (issue #3,
 # M1.3). This is an explicit allowlist, not `install(DIRECTORY include/)`: the
 # rest of `include/` is node and algorithm internals and must stay private so
-# that "stable surface" keeps meaning something. Stage interface headers join
-# this list in M2.1 (issue #6) when the pluginlib base lands.
+# that "stable surface" keeps meaning something. The stage interface headers were
+# added to the surface in M2.1 (issue #6) — see the block just below.
 #
 # Keep in sync with src/tools/pipeline_types_surface_check.cpp and
 # doc/modularity/pipeline_types.md.
@@ -374,7 +416,41 @@ install(FILES
         include/mit_controller/pipeline_constants.hpp
         DESTINATION include/mit_controller)
 
+###################################
+# Stage interface + plugin surface (issue #6, M2.1)
+###################################
+# The frozen stage APIs (stage_contracts.md) plus the pluginlib lifecycle base
+# (plugin_lifecycle.md). These join the exported surface now that the pluginlib
+# base has landed — pipeline_types.md §6 planned this for M2.1. Still an explicit
+# allowlist: everything not listed here stays node/algorithm-internal.
+#
+# gait_sequencer_types.hpp travels with the GS interface (it includes it);
+# joint_commands.hpp travels with the WBC interface (SolverInformation / WBCReturn
+# live inside the interface headers themselves). stage_plugin.hpp is already
+# self-contained (plugin_lifecycle.md §7).
+#
+# Keep in sync with src/tools/pipeline_types_surface_check.cpp and
+# doc/modularity/{pipeline_types,plugin_lifecycle}.md.
+install(FILES
+        include/mit_controller/gait_sequencer_interface.hpp
+        include/mit_controller/gait_sequencer_types.hpp
+        include/mit_controller/mpc_interface.hpp
+        include/mit_controller/swing_leg_controller_interface.hpp
+        include/mit_controller/wbc_interface.hpp
+        include/mit_controller/joint_commands.hpp
+        include/mit_controller/contact_logic_interface.hpp
+        include/mit_controller/stage_plugin.hpp
+        DESTINATION include/mit_controller)
+install(FILES
+        include/model_adaptation/model_adaptation_interface.hpp
+        DESTINATION include/model_adaptation)
+
 ament_export_include_directories(include)
-ament_export_dependencies(common Eigen3)
+# The exported stage interface surface (below) includes rclcpp/parameter_value.hpp,
+# rclcpp/time.hpp and interfaces/msg/gait_state.hpp, and StagePlugin<Interface> is a
+# pluginlib base. Out-of-package stage plugins (the M4 goal) must pull these in
+# transitively rather than re-`find_package`-ing them by hand — the same
+# consumer-boilerplate trap that `common` fell into (pipeline_types.md §7, item 1).
+ament_export_dependencies(common Eigen3 rclcpp interfaces pluginlib)
 
 ament_package()

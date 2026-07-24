@@ -1,0 +1,17 @@
+<!--
+  Contact-logic stage plugins (issue #6, M2.1).
+
+  base_class_type: StagePlugin<ContactLogicInterface>
+    (mit_controller/stage_plugin.hpp + mit_controller/contact_logic_interface.hpp)
+
+  ContactLogicInterface was frozen in M1.4 (issue #4) and StagePlugin<ContactLogicInterface>
+  already compiles (test/test_stage_contracts.cpp), so its discovery point is defined
+  now — satisfying issue #6's "(and Contact when ready)". The FSM extraction that
+  populates this file with a stock class is M3.1 (issue #12), which then becomes purely
+  additive.
+
+  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
+  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+-->
+<class_libraries>
+</class_libraries>

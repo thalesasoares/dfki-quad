@@ -28,6 +28,24 @@
 
 #include "mit_controller/pipeline_constants.hpp"  // IWYU pragma: keep
 
+// Stage interface + pluginlib surface (issue #6, M2.1). Each is included in its
+// own block, seen through the same restricted include path an out-of-package
+// plugin gets, so this fails the build if any of them reaches into node internals
+// (e.g. the potato_sim/ headers or host-only mit_controller_params.hpp).
+#include "mit_controller/gait_sequencer_interface.hpp"  // IWYU pragma: keep
+
+#include "mit_controller/mpc_interface.hpp"  // IWYU pragma: keep
+
+#include "mit_controller/swing_leg_controller_interface.hpp"  // IWYU pragma: keep
+
+#include "mit_controller/wbc_interface.hpp"  // IWYU pragma: keep
+
+#include "mit_controller/contact_logic_interface.hpp"  // IWYU pragma: keep
+
+#include "mit_controller/stage_plugin.hpp"  // IWYU pragma: keep
+
+#include "model_adaptation/model_adaptation_interface.hpp"  // IWYU pragma: keep
+
 #include <type_traits>
 
 namespace {
@@ -69,6 +87,26 @@ static_assert(std::tuple_size_v<decltype(MPCPrediction::raw_data)> == MPC_PREDIC
 // pushing a weight switch (issue #2).
 static_assert(static_cast<int>(GaitSequence::KEEP) == 0);
 static_assert(static_cast<int>(GaitSequence::MOVE) == 1);
+
+// The stage interfaces and their pluginlib bases are abstract: a plugin must
+// override the frozen interface, and StagePlugin adds the Init lifecycle phase on
+// top without becoming instantiable itself (plugin_lifecycle.md §7). The contract
+// test (test/test_stage_contracts.cpp) drives them through create/Init/run; here
+// we only assert the surface headers yield the right abstract shape when compiled
+// as an out-of-package consumer sees them.
+static_assert(std::is_abstract_v<GaitSequencerInterface>);
+static_assert(std::is_abstract_v<MPCInterface>);
+static_assert(std::is_abstract_v<SwingLegControllerInterface>);
+static_assert(std::is_abstract_v<WBCInterface<JointTorqueVelocityPositionCommands>>);
+static_assert(std::is_abstract_v<ContactLogicInterface>);
+static_assert(std::is_abstract_v<ModelAdaptationInterface>);
+
+static_assert(std::is_abstract_v<StagePlugin<GaitSequencerInterface>>);
+static_assert(std::is_abstract_v<StagePlugin<MPCInterface>>);
+static_assert(std::is_abstract_v<StagePlugin<SwingLegControllerInterface>>);
+static_assert(std::is_abstract_v<StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>);
+static_assert(std::is_abstract_v<StagePlugin<ContactLogicInterface>>);
+static_assert(std::is_abstract_v<StagePlugin<ModelAdaptationInterface>>);
 
 // Instantiate every type once and read every instance back, so the definitions
 // are odr-used rather than merely parsed.

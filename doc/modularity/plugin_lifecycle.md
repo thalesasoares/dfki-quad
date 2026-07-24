@@ -1,9 +1,12 @@
 # Stage Plugin Lifecycle
 
-**Status:** specified ahead of M2.2 (issue #7); implemented across M2.1–M2.4 (issues #6–#9) ·
+**Status:** specified ahead of M2.2 (issue #7); implemented across M2.1–M2.4 (issues #6–#9). M2.1
+landed: `stage_plugin.hpp` and the stage interfaces are exported and the plugin description schema is
+defined — see [`plugin_discovery.md`](plugin_discovery.md). ·
 **Applies to:** `ws/src/controllers` ·
 **Companion documents:** [`stage_contracts.md`](stage_contracts.md) — the frozen stage APIs ·
-[`pipeline_types.md`](pipeline_types.md) — the data they exchange
+[`pipeline_types.md`](pipeline_types.md) — the data they exchange ·
+[`plugin_discovery.md`](plugin_discovery.md) — the M2.1 dependency, exported surface and XML schema
 
 `stage_contracts.md` froze *what* each stage does; this document specifies *how a stage comes to
 life* once stages are loaded through `pluginlib` (milestone M2). It exists because the two are in
@@ -155,7 +158,7 @@ the interface headers need (pipeline_types.md §6).
 | Issue | Title | Relationship |
 |---|---|---|
 | #24 | [Meta] Modular Go2 control | Parent |
-| #6 | [M2.1] pluginlib dependency and plugin description XML | Exports `stage_plugin.hpp`; XML names the `StagePlugin<…>` bases |
+| #6 | [M2.1] pluginlib dependency and plugin description XML | Exports `stage_plugin.hpp`; XML names the `StagePlugin<…>` bases — [`plugin_discovery.md`](plugin_discovery.md) |
 | #7 | [M2.2] Stage plugin base + loader helper | **Implements this contract** — loader resolves `type:`, default-constructs, calls `Init`, translates `StageInitError` into the fail-fast path |
 | #8 | [M2.3] Wrap existing stages as stock plugins | §4 — adapter wrappers whose `Init` bodies are today's host factory code |
 | #9 | [M2.4] Thin PipelineHost | §3 declaration strategy, §5 loader lifetime and swap-under-lock |
