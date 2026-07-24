@@ -140,6 +140,70 @@ if (BUILD_TESTING)
     ament_target_dependencies(test_plugin_discovery
             pluginlib ament_index_cpp common interfaces rclcpp Eigen3)
     target_compile_options(test_plugin_discovery PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+    # ##########################################################################
+    # --- Stage loader test (issue #7, M2.2) --- #
+    # ##########################################################################
+    # test/test_stage_loader.cpp drives StageLoader through the real pluginlib
+    # chain — description XML, class lookup, dlopen, default construction, Init —
+    # and pins the fail-fast behaviour that is the issue's actual acceptance
+    # criterion: a missing or invalid `type:` throws with the offending key/value
+    # named, and never substitutes another stage.
+    #
+    # That needs a loadable plugin, and M2.2 ships none in production (the stock
+    # wrappers are M2.3, issue #8). Hence this test-only library. Two rules keep
+    # it from leaking into the product:
+    #
+    #  1. test/stage_loader_test_plugins.xml is NOT passed to
+    #     pluginlib_export_plugin_description_file(), so it never joins the
+    #     `controllers__pluginlib__plugin` resource and test_plugin_discovery
+    #     keeps (correctly) seeing zero declared classes for every stage base.
+    #     The test hands the path to StageLoader's explicit plugin_xml_paths
+    #     argument instead.
+    #  2. Both the library and the test exist only under BUILD_TESTING.
+    #
+    # The library *is* installed, into the same lib/ the package's other targets
+    # use: pluginlib resolves a plugin library only relative to the install prefix
+    # of the package that owns the description XML (getAllLibraryPathsToTry —
+    # absolute paths in `path=` are not honoured), and the XML lives in this
+    # package's source tree, so `controllers`' prefix is where it will look.
+    #
+    # `common` and `interfaces` are pulled in as include paths only, not through
+    # ament_target_dependencies. This plugin needs just their *headers* — the
+    # abstract ModelInterface/StateInterface and the default-constructible
+    # GaitState message — and linking `common` would drag in its whole library
+    # closure (quad_model_pino → pinocchio → drake → a non-PIC static libfmt.a),
+    # which cannot go into a shared object at all: "relocation R_X86_64_PC32 …
+    # can not be used when making a shared object". Worth knowing for M2.3
+    # (issue #8), whose stock plugin libraries link acados and fmt for real — see
+    # doc/modularity/stage_loading.md §6.
+    add_library(stage_loader_test_plugins SHARED test/stage_loader_test_plugins.cpp)
+    # `common` exports no ament include directories (it carries them on its
+    # imported targets instead — the transitive-dependency wart noted in
+    # doc/modularity/pipeline_types.md §7), so its include path is read off the
+    # target rather than linked.
+    target_include_directories(stage_loader_test_plugins PRIVATE
+            include include/mit_controller
+            $<TARGET_PROPERTY:common::quad_model_symbolic,INTERFACE_INCLUDE_DIRECTORIES>
+            ${interfaces_INCLUDE_DIRS})
+    ament_target_dependencies(stage_loader_test_plugins pluginlib rclcpp Eigen3)
+    target_compile_options(stage_loader_test_plugins PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    install(TARGETS stage_loader_test_plugins DESTINATION lib)
+
+    ament_add_gtest(test_stage_loader
+            test/test_stage_loader.cpp
+            src/potato_sim/potato_model.cpp
+            APPEND_ENV AMENT_PREFIX_PATH=${CMAKE_INSTALL_PREFIX})
+    target_include_directories(test_stage_loader PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_stage_loader
+            pluginlib common interfaces rclcpp Eigen3)
+    # The test-only description file, by absolute source path: it is deliberately
+    # not exported, so there is no ament resource to find it through.
+    target_compile_definitions(test_stage_loader PRIVATE
+            STAGE_LOADER_TEST_PLUGIN_XML="${CMAKE_CURRENT_SOURCE_DIR}/test/stage_loader_test_plugins.xml")
+    target_compile_options(test_stage_loader PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_dependencies(test_stage_loader stage_loader_test_plugins)
 endif ()
 
 
@@ -346,7 +410,11 @@ add_library(pipeline_types_surface_check OBJECT src/tools/pipeline_types_surface
 set_property(TARGET pipeline_types_surface_check
         PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-ament_target_dependencies(pipeline_types_surface_check common Eigen3 rclcpp interfaces)
+# pluginlib joins the list in M2.2 (issue #7): stage_loader.hpp is on the surface
+# and includes pluginlib/class_loader.hpp. Listing it here is also the check that
+# `ament_export_dependencies(... pluginlib)` is what an out-of-package plugin
+# actually needs — this target consumes the headers the way that consumer does.
+ament_target_dependencies(pipeline_types_surface_check common Eigen3 rclcpp interfaces pluginlib)
 target_compile_options(pipeline_types_surface_check PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 # The M1.4 ContactLogicInterface compile check
@@ -427,10 +495,12 @@ install(FILES
 # gait_sequencer_types.hpp travels with the GS interface (it includes it);
 # joint_commands.hpp travels with the WBC interface (SolverInformation / WBCReturn
 # live inside the interface headers themselves). stage_plugin.hpp is already
-# self-contained (plugin_lifecycle.md §7).
+# self-contained (plugin_lifecycle.md §7), and so is stage_loader.hpp (issue #7,
+# M2.2) — it includes only stage_plugin.hpp and pluginlib, never a stage
+# interface, so a consumer pays for exactly the bases it instantiates.
 #
 # Keep in sync with src/tools/pipeline_types_surface_check.cpp and
-# doc/modularity/{pipeline_types,plugin_lifecycle}.md.
+# doc/modularity/{pipeline_types,plugin_lifecycle,stage_loading}.md.
 install(FILES
         include/mit_controller/gait_sequencer_interface.hpp
         include/mit_controller/gait_sequencer_types.hpp
@@ -440,6 +510,7 @@ install(FILES
         include/mit_controller/joint_commands.hpp
         include/mit_controller/contact_logic_interface.hpp
         include/mit_controller/stage_plugin.hpp
+        include/mit_controller/stage_loader.hpp
         DESTINATION include/mit_controller)
 install(FILES
         include/model_adaptation/model_adaptation_interface.hpp
