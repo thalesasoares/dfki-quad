@@ -1,0 +1,42 @@
+<!--
+  Test-only plugin description for the stage loader test (issue #7, M2.2).
+
+  This file is deliberately NOT registered with
+  pluginlib_export_plugin_description_file(): it must stay out of the
+  `controllers__pluginlib__plugin` ament resource so that production discovery
+  keeps reporting zero declared classes until the stock wrappers land in M2.3
+  (issue #8) — test/test_plugin_discovery.cpp asserts exactly that. The loader
+  test reaches these classes by passing this file's path to StageLoader's
+  explicit `plugin_xml_paths` constructor argument instead.
+
+  It lives in the source tree rather than the build directory on purpose:
+  pluginlib determines the exporting package by walking up from the XML file to
+  the nearest package.xml, and uses that package's install prefix to find the
+  library. From here that walk lands on ws/src/controllers/package.xml, so the
+  library is looked for in the `controllers` install prefix — which is where
+  CMakeLists.txt installs it (under BUILD_TESTING only).
+
+  Note the escaped '<' in base_class_type. `StagePlugin<GaitSequencerInterface>`
+  cannot be written literally in an XML attribute; `&lt;` is required and
+  tinyxml2 unescapes it before pluginlib compares it against the C++-side string,
+  so the two spellings match. M2.3 must escape the stock wrappers' base strings
+  the same way — see doc/modularity/stage_loading.md §5.
+-->
+<class_libraries>
+  <library path="stage_loader_test_plugins">
+    <class name="stage_loader_test/ok"
+           type="stage_loader_test::LoaderTestGaitSequencer"
+           base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;">
+      <description>
+        Test gait sequencer that reports through the frozen interface what its Init received.
+      </description>
+    </class>
+    <class name="stage_loader_test/init_fails"
+           type="stage_loader_test::LoaderTestFailingGaitSequencer"
+           base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;">
+      <description>
+        Test gait sequencer whose Init always throws StageInitError, for the fail-fast path.
+      </description>
+    </class>
+  </library>
+</class_libraries>

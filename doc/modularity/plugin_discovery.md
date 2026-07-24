@@ -3,6 +3,7 @@
 **Status:** added in M2.1 (issue #6) ·
 **Applies to:** `ws/src/controllers` ·
 **Companion documents:** [`plugin_lifecycle.md`](plugin_lifecycle.md) — the `StagePlugin` lifecycle ·
+[`stage_loading.md`](stage_loading.md) — the M2.2 loader that consumes this schema ·
 [`stage_contracts.md`](stage_contracts.md) — the frozen stage APIs ·
 [`pipeline_types.md`](pipeline_types.md) — the exported data types
 
@@ -77,7 +78,15 @@ One description file per stage base class, under `plugins/`:
 **These base-class-type strings are the schema.** M2.2's loader helper and M2.3's wrapper
 `PLUGINLIB_EXPORT_CLASS` calls must use them verbatim. Changing one requires updating this file, the
 XML, and the loader in the same PR — the same rule [`plugin_lifecycle.md`](plugin_lifecycle.md) §1
-applies to the lifecycle.
+applies to the lifecycle. M2.2 spells them once in code as `stage_plugin_bases::k*`
+(`mit_controller/stage_loader.hpp`), and a test compares each constant against the literal in this
+table.
+
+**In XML they must be escaped.** `<` is not legal in an attribute value, so a real `<class>` entry
+reads `base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;"`; tinyxml2 unescapes before
+pluginlib compares against the C++-side string. The files below carry the base strings in comments
+only, so this did not bite in M2.1 — M2.3 must get it right, and
+[`stage_loading.md`](stage_loading.md) §5 has a working example.
 
 Design decisions:
 
@@ -113,6 +122,11 @@ which installs it to `share/controllers/plugins/` and registers the
    XML and asserts zero declared classes (M2.1 is schema-only). In M2.3 these assertions flip to
    expecting the stock IDs, so the test grows with the milestone.
 
+M2.2 adds `test/test_stage_loader.cpp`, which re-checks point 2 through `StageLoader` — the API the
+host will actually use — and additionally loads *real* plugins from a description file that is
+deliberately **not** exported, so this test's zero-class expectation stays valid. See
+[`stage_loading.md`](stage_loading.md) §7.
+
 Because the ament resource lives in the install space, the CMake target extends `AMENT_PREFIX_PATH`
 with `CMAKE_INSTALL_PREFIX` for the test process; under `colcon test` the package is already
 installed, so the resource is present.
@@ -133,7 +147,7 @@ stages through the existing `unique_ptr<Interface>` indirection (no new per-cycl
 |---|---|---|
 | #24 | [Meta] Modular Go2 control | Parent |
 | #6 | [M2.1] pluginlib dependency and plugin description XML | **This document** |
-| #7 | [M2.2] Stage plugin base + loader helper | Consumes the base-class-type strings |
+| #7 | [M2.2] Stage plugin base + loader helper | Consumes the base-class-type strings — [`stage_loading.md`](stage_loading.md) |
 | #8 | [M2.3] Wrap existing stages as stock plugins | Fills the `<class>` entries; flips the discovery test's expected count |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns the loaders; keeps per-cycle indirection unchanged |
 | #10 | [M2.5] YAML schema for stage selection | Owns the `type:` key vocabulary |

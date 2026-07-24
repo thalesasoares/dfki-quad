@@ -210,3 +210,4 @@ aligned `new` handles Eigen's over-aligned fixed-size types, so no
 | #3 | [M1.3] Shared pipeline data types package surface | **This document** |
 | #5 | [M1.5] Contract tests / compile smoke | Complementary guard, different axis — [`contract_tests.md`](contract_tests.md) |
 | #6 | [M2.1] pluginlib dependency and plugin description XML | Added the interface headers to the surface (§6); see [`plugin_discovery.md`](plugin_discovery.md) |
+| #7 | [M2.2] Stage plugin base + loader helper | Added `stage_loader.hpp` to the surface and the surface check; ran into the `common` transitive-dependency wart of §7 — see [`stage_loading.md`](stage_loading.md) |

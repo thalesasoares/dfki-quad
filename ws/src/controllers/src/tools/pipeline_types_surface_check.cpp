@@ -44,6 +44,8 @@
 
 #include "mit_controller/stage_plugin.hpp"  // IWYU pragma: keep
 
+#include "mit_controller/stage_loader.hpp"  // IWYU pragma: keep
+
 #include "model_adaptation/model_adaptation_interface.hpp"  // IWYU pragma: keep
 
 #include <type_traits>
@@ -107,6 +109,41 @@ static_assert(std::is_abstract_v<StagePlugin<SwingLegControllerInterface>>);
 static_assert(std::is_abstract_v<StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>);
 static_assert(std::is_abstract_v<StagePlugin<ContactLogicInterface>>);
 static_assert(std::is_abstract_v<StagePlugin<ModelAdaptationInterface>>);
+
+// The loader (issue #7, M2.2) instantiates for every stage base through the same
+// export-only include path. Its non-copyable/non-movable shape is contractual,
+// not incidental: the pluginlib ClassLoader it owns must outlive every instance
+// it created, so a loader that could be moved out from under its stages would be
+// a dangling-vtable trap (doc/modularity/stage_loading.md §3).
+static_assert(!std::is_copy_constructible_v<StageLoader<GaitSequencerInterface>>);
+static_assert(!std::is_move_constructible_v<StageLoader<GaitSequencerInterface>>);
+static_assert(!std::is_copy_assignable_v<StageLoader<GaitSequencerInterface>>);
+static_assert(!std::is_move_assignable_v<StageLoader<GaitSequencerInterface>>);
+
+static_assert(std::is_same_v<StageLoader<MPCInterface>::Plugin, StagePlugin<MPCInterface>>);
+static_assert(std::is_same_v<StageLoader<SwingLegControllerInterface>::Plugin,
+                             StagePlugin<SwingLegControllerInterface>>);
+static_assert(std::is_same_v<StageLoader<WBCInterface<JointTorqueVelocityPositionCommands>>::Plugin,
+                             StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>);
+static_assert(std::is_same_v<StageLoader<ContactLogicInterface>::Plugin, StagePlugin<ContactLogicInterface>>);
+static_assert(std::is_same_v<StageLoader<ModelAdaptationInterface>::Plugin, StagePlugin<ModelAdaptationInterface>>);
+
+// The host (M2.4) holds stages as PluginPtr members it default-constructs and
+// later move-assigns from Load — including the reconfiguration swap of
+// plugin_lifecycle.md §5. Both properties are required for that pattern to
+// compile at all, so they are pinned here rather than discovered in M2.4.
+static_assert(std::is_default_constructible_v<StageLoader<GaitSequencerInterface>::PluginPtr>);
+static_assert(std::is_move_assignable_v<StageLoader<GaitSequencerInterface>::PluginPtr>);
+// And it really is a pointer to the frozen interface, so call sites do not change.
+static_assert(std::is_convertible_v<StageLoader<GaitSequencerInterface>::PluginPtr::pointer,
+                                    GaitSequencerInterface*>);
+
+// A StageLoadError is not a StageInitError and vice versa: the host (and a human
+// reading a bring-up crash) must be able to tell "no such stage" apart from "that
+// stage could not configure itself" (stage_loading.md §2).
+static_assert(!std::is_base_of_v<StageInitError, StageLoadError>);
+static_assert(!std::is_base_of_v<StageLoadError, StageInitError>);
+static_assert(std::is_base_of_v<std::runtime_error, StageLoadError>);
 
 // Instantiate every type once and read every instance back, so the definitions
 // are odr-used rather than merely parsed.

@@ -61,6 +61,10 @@ three instantiations may rot before issue #13 de-templates it.
   stage base is `test/test_plugin_discovery.cpp` (M2.1, issue #6) — see
   [`plugin_discovery.md`](plugin_discovery.md) §4. Different axis: the ament resource and XML, not the
   interface shape.
+- **Plugin loading.** That a `type:` string resolves to an initialised stage, and that a missing or
+  invalid one fails loudly instead of falling back, is `test/test_stage_loader.cpp` (M2.2, issue #7) —
+  see [`stage_loading.md`](stage_loading.md) §7. This test drives a fake through `Init` **by hand**;
+  that one drives real, `dlopen`-ed plugins through `StageLoader`.
 
 ## 4. How to run it
 
@@ -95,6 +99,7 @@ different, export-only axis described in §3.
 | #4 | [M1.4] Define `ContactLogicInterface` | Absorbs and removes its compile check |
 | #5 | [M1.5] Contract tests / compile smoke | **This document** |
 | #6 | [M2.1] pluginlib dependency and plugin description XML | Exported the interface headers (extending the surface check) and added `test_plugin_discovery.cpp` — [`plugin_discovery.md`](plugin_discovery.md) |
+| #7 | [M2.2] Stage plugin base + loader helper | Reuses `fake_stages.hpp`'s plugin stub pattern; adds `test_stage_loader.cpp` on the loading axis (§3) — [`stage_loading.md`](stage_loading.md) |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | The refactor this test protects |
 | #13 | [M3.2] Runtime WBC / command-type profile | Removes the template the WBC block works around (gap G8) |
 | #17 | [M4.2] Example passthrough / logging plugin | Starts from `FakeContactLogic`'s pass-through `Reconcile` |
