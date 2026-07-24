@@ -2,11 +2,13 @@
 
 **Status:** specified ahead of M2.2 (issue #7); implemented across M2.1–M2.4 (issues #6–#9). M2.1
 landed: `stage_plugin.hpp` and the stage interfaces are exported and the plugin description schema is
-defined — see [`plugin_discovery.md`](plugin_discovery.md). ·
+defined — see [`plugin_discovery.md`](plugin_discovery.md). M2.2 landed: `StageLoader` drives the
+create → `Init` path and the fail-fast errors — see [`stage_loading.md`](stage_loading.md). ·
 **Applies to:** `ws/src/controllers` ·
 **Companion documents:** [`stage_contracts.md`](stage_contracts.md) — the frozen stage APIs ·
 [`pipeline_types.md`](pipeline_types.md) — the data they exchange ·
-[`plugin_discovery.md`](plugin_discovery.md) — the M2.1 dependency, exported surface and XML schema
+[`plugin_discovery.md`](plugin_discovery.md) — the M2.1 dependency, exported surface and XML schema ·
+[`stage_loading.md`](stage_loading.md) — the M2.2 loader that implements this contract
 
 `stage_contracts.md` froze *what* each stage does; this document specifies *how a stage comes to
 life* once stages are loaded through `pluginlib` (milestone M2). It exists because the two are in
@@ -159,7 +161,7 @@ the interface headers need (pipeline_types.md §6).
 |---|---|---|
 | #24 | [Meta] Modular Go2 control | Parent |
 | #6 | [M2.1] pluginlib dependency and plugin description XML | Exports `stage_plugin.hpp`; XML names the `StagePlugin<…>` bases — [`plugin_discovery.md`](plugin_discovery.md) |
-| #7 | [M2.2] Stage plugin base + loader helper | **Implements this contract** — loader resolves `type:`, default-constructs, calls `Init`, translates `StageInitError` into the fail-fast path |
+| #7 | [M2.2] Stage plugin base + loader helper | **Implements this contract** — `StageLoader` resolves `type:`, default-constructs, calls `Init`, translates `StageInitError` into the fail-fast path; `Create` is the §5 swap path — [`stage_loading.md`](stage_loading.md) |
 | #8 | [M2.3] Wrap existing stages as stock plugins | §4 — adapter wrappers whose `Init` bodies are today's host factory code |
 | #9 | [M2.4] Thin PipelineHost | §3 declaration strategy, §5 loader lifetime and swap-under-lock |
 | #10 | [M2.5] YAML schema for stage selection | Owns the `type:` keys and any parameter renaming; this contract is naming-agnostic |
