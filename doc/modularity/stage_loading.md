@@ -172,13 +172,29 @@ The design constraints that keep it that way once the host does use it:
 - **Zero cost to non-users.** `stage_loader.hpp` is a template header including only
   `stage_plugin.hpp` and pluginlib, so a translation unit pays only for the bases it instantiates.
 
-One finding for **M2.3** (#8), learned while building the test plugin library: this package links a
-non-PIC static `libfmt.a` (through `common` → `quad_model_pino` → drake, and directly in
-`mitcontrollernode`), and a non-PIC archive **cannot** go into a shared object — the link fails with
-`relocation R_X86_64_PC32 … can not be used when making a shared object`. The stock plugin `.so`s
-will hit this the moment they link the real algorithm code. Either the affected dependencies get
-rebuilt with `-fPIC` or the plugin libraries must be arranged to avoid them. The test plugin library
-sidesteps it by consuming `common`/`interfaces` as headers only; a real wrapper cannot.
+**The non-PIC `libfmt.a` problem and how M2.3 resolved it.** This package links a non-PIC static
+`libfmt.a` (through `common` → `quad_model_pino` → drake, and directly in `mitcontrollernode`), and a
+non-PIC archive **cannot** go into a shared object — the link fails with
+`relocation R_X86_64_PC32 … can not be used when making a shared object`. M2.3's stock plugin `.so`s
+resolve it without rebuilding the Docker image, by keeping every non-PIC archive off their link line:
+
+- **`common` is consumed as an include path only, never linked.** The wrapped algorithm code uses
+  only `common`'s *abstract* `ModelInterface`/`StateInterface` and its header-only helpers, so it
+  references no compiled `common` symbol; linking `common` would drag in the whole
+  `quad_model_pino → pinocchio → drake → libfmt.a` closure. `interfaces` is a normal ROS message
+  package (shared, PIC) and is linked normally.
+- **`fmt` is linked header-only** (`fmt::fmt-header-only`) in `libwbc_plugins`, the one library whose
+  algorithm code (`wbc_arc_opt.cpp`) uses `fmt::format`/`print`. That keeps the archive off the link
+  line with identical runtime formatting.
+
+Everything else the wrappers need — acados, the ARC-OPT `libwbc-*.so`, `OsqpEigen`, pinocchio — is
+already a shared, position-independent library. The fallback, had a static archive proved
+unavoidable, was to rebuild it `-fPIC` in `docker/Dockerfile` and mark `common`'s libraries
+`POSITION_INDEPENDENT_CODE ON`; it was not needed. One incidental consequence of building the
+algorithm code `-fPIC` (forced by `SHARED`): GCC 11 + `-Ofast` + `-fPIC` emits a spurious
+`-Wmaybe-uninitialized` inside Eigen that the non-PIC node never hits, so the plugin libraries demote
+just that one warning to non-fatal (`-Wno-error=maybe-uninitialized`); all other warnings stay hard
+errors.
 
 ## 7. What guards it
 

@@ -3,7 +3,9 @@
 **Status:** specified ahead of M2.2 (issue #7); implemented across M2.1–M2.4 (issues #6–#9). M2.1
 landed: `stage_plugin.hpp` and the stage interfaces are exported and the plugin description schema is
 defined — see [`plugin_discovery.md`](plugin_discovery.md). M2.2 landed: `StageLoader` drives the
-create → `Init` path and the fail-fast errors — see [`stage_loading.md`](stage_loading.md). ·
+create → `Init` path and the fail-fast errors — see [`stage_loading.md`](stage_loading.md). M2.3
+landed: the eight stock wrappers (§4) around GS/MPC/SLC/WBC/MA are built, declared and tested — see
+[`stock_plugins.md`](stock_plugins.md). ·
 **Applies to:** `ws/src/controllers` ·
 **Companion documents:** [`stage_contracts.md`](stage_contracts.md) — the frozen stage APIs ·
 [`pipeline_types.md`](pipeline_types.md) — the data they exchange ·
@@ -119,6 +121,15 @@ The wrapper's `Init` body is today's host factory code (`GetGaitSequencerFromPar
 `make_unique<MPC>(…)` block, the `create_wbc` lambda), with `get_parameter(x)` mechanically
 replaced by `init.Require(x)` / defaulted lookups. Option A remains open per-stage later, without
 changing this contract — the lifecycle only sees `StagePlugin<Interface>`.
+
+M2.3 (#8) implemented this for all eight current algorithms — `simple_gait`, `adaptive_gait`,
+`acados_mpc`, `bezier_swing`, `wbc_arc_opt`, `inverse_dynamics`, `kf_adaptation`, `rls_adaptation` —
+in `src/plugins/`, one library per stage base. The `Init` bodies are the two branches of
+`GetGaitSequencerFromParams`, the MPC block, the two branches of `create_wbc`, and the two `ma_mode`
+branches respectively; the branch that used to be chosen by a parameter (`gait_sequencer`, `ma_mode`,
+`USE_WBC`) is now the plugin selection. Because the wrappers only forward, "no intentional behavior
+change" is auditable from the wrapper against the cited host lines. See
+[`stock_plugins.md`](stock_plugins.md) for the per-stage parameter tables.
 
 ## 5. Threading, reconfiguration, loader lifetime
 

@@ -12,11 +12,31 @@
   interface, THIS FILE is the one that gets reworked — the other stage XML files are
   unaffected, which is why the WBC declaration is isolated here.
 
-  Empty schema-only declaration; stock wrappers land in M2.3 (issue #8). Suggested
-  stock IDs (issue #8): wbc_arc_opt, inverse_dynamics.
+  Stock wrappers filled in by M2.3 (issue #8): wbc_arc_opt and inverse_dynamics, in
+  src/plugins/wbc_plugins.cpp, both built into libwbc_plugins. Because WBCInterface
+  is a template, the two register under two different base_class_types in the same
+  library: wbc_arc_opt under the JointTorqueVelocityPositionCommands instantiation
+  (stage_plugin_bases::kWBC, the Go2 path) and inverse_dynamics under the
+  CartesianCommands instantiation (stage_plugin_bases::kWBCCartesian, the ULab/ikin
+  path). #13 (M3.2) collapses these into one once the interface is de-templated.
 
+  The '<' in base_class_type is XML-escaped as &lt;/&gt; (stage_loading.md §5).
   The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
   naming-agnostic per doc/modularity/plugin_lifecycle.md.
 -->
 <class_libraries>
+  <library path="libwbc_plugins">
+    <class name="wbc_arc_opt"
+           type="stock_plugins::WbcArcOptPlugin"
+           base_class_type="StagePlugin&lt;WBCInterface&lt;JointTorqueVelocityPositionCommands&gt;&gt;">
+      <description>ARC-OPT task-space inverse dynamics WBC producing joint torque/velocity/position
+        commands (WBCArcOPT), the Go2 path.</description>
+    </class>
+    <class name="inverse_dynamics"
+           type="stock_plugins::InverseDynamicsPlugin"
+           base_class_type="StagePlugin&lt;WBCInterface&lt;CartesianCommands&gt;&gt;">
+      <description>Inverse-dynamics WBC producing Cartesian foot commands (InverseDynamics), the
+        ULab/ikin path.</description>
+    </class>
+  </library>
 </class_libraries>

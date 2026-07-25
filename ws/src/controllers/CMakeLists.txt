@@ -72,10 +72,10 @@ include_directories(include include/mit_controller src)
 # ##############################################################################
 # One plugin description file per stage base class. They install the XML and
 # register the `controllers__pluginlib__plugin` ament-index resource that
-# pluginlib::ClassLoader reads for discovery. The files are schema-only in M2.1
-# (no <class> entries yet); M2.3 (#8) fills the wrappers in, M3.1 (#12) adds the
-# contact class, and #13 reworks only wbc_plugins.xml. See
-# doc/modularity/plugin_discovery.md.
+# pluginlib::ClassLoader reads for discovery. M2.3 (#8) filled in the stock
+# wrapper <class> entries (built by the stock stage plugin section below);
+# contact_logic_plugins.xml stays empty until M3.1 (#12) adds the contact class,
+# and #13 reworks only wbc_plugins.xml. See doc/modularity/plugin_discovery.md.
 pluginlib_export_plugin_description_file(controllers plugins/gait_sequencer_plugins.xml)
 pluginlib_export_plugin_description_file(controllers plugins/mpc_plugins.xml)
 pluginlib_export_plugin_description_file(controllers plugins/slc_plugins.xml)
@@ -204,6 +204,29 @@ if (BUILD_TESTING)
             STAGE_LOADER_TEST_PLUGIN_XML="${CMAKE_CURRENT_SOURCE_DIR}/test/stage_loader_test_plugins.xml")
     target_compile_options(test_stage_loader PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_dependencies(test_stage_loader stage_loader_test_plugins)
+
+    # ##########################################################################
+    # --- Stock stage plugin test (issue #8, M2.3) --- #
+    # ##########################################################################
+    # Drives the real stock wrappers through production ament discovery: each
+    # stock plugin dlopens, constructs and Init's, and the fail-fast error paths
+    # hold. Unlike test_stage_loader (synthetic plugin), this proves the shipped
+    # libraries. The test executable links only common/interfaces/pluginlib — the
+    # algorithm code (acados, ARC-OPT, fmt) lives in the plugin .so files that
+    # pluginlib dlopens, so a successful load of libwbc_plugins is the runtime
+    # check that the non-PIC-libfmt link story (stage_loading.md §6) resolves.
+    # potato_model.cpp supplies the BrickModel/BrickState clones for StageInit.
+    ament_add_gtest(test_stock_plugins
+            test/test_stock_plugins.cpp
+            src/potato_sim/potato_model.cpp
+            APPEND_ENV AMENT_PREFIX_PATH=${CMAKE_INSTALL_PREFIX})
+    target_include_directories(test_stock_plugins PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_stock_plugins
+            pluginlib common interfaces rclcpp Eigen3)
+    target_compile_options(test_stock_plugins PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_dependencies(test_stock_plugins
+            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins)
 endif ()
 
 
@@ -357,6 +380,120 @@ target_include_directories(
         PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
+
+
+# ##############################################################################
+# --- Stock stage plugins (issue #8, M2.3) --- #
+# ##############################################################################
+# One SHARED library per stage base, matching the per-stage description XML in
+# plugins/. Each holds a thin adapter (src/plugins/<family>_plugins.cpp) plus the
+# untouched algorithm sources it wraps; the wrapper's Init is the host factory
+# body relocated behind the plugin boundary (plugin_lifecycle.md §4). The
+# algorithm sources are compiled here as well as into mitcontrollernode until M2.4
+# turns the host into a thin loader and drops them from the node.
+#
+# `common` and `interfaces` headers are needed but `common` is consumed as an
+# INCLUDE PATH ONLY, never linked: linking it drags in its whole closure
+# (quad_model_pino -> pinocchio -> drake -> a non-PIC static libfmt.a), which
+# cannot go into a shared object — "relocation R_X86_64_PC32 ... can not be used
+# when making a shared object" (stage_loading.md §6). The algorithm code only
+# uses common's *abstract* ModelInterface/StateInterface and header-only helpers,
+# so it never references a compiled `common` symbol. `interfaces` is a normal ROS
+# message package (shared, PIC) and is linked normally for the GaitState message.
+# The directory-level include_directories(include include/mit_controller src)
+# above already puts this package's own headers and src/plugins on the path.
+#
+# The libraries inherit the directory-scope Release flags (-Ofast on x86 / -O3 on
+# aarch64) so the control-loop code is optimised identically to the node — a
+# lower-optimised plugin .so would be an invisible on-robot regression.
+set(stock_plugin_common_includes
+        $<TARGET_PROPERTY:common::quad_model_symbolic,INTERFACE_INCLUDE_DIRECTORIES>)
+
+# Same warning set as every other target here, but with one demotion: a SHARED
+# library forces -fPIC on its objects, and GCC 11 + -Ofast + -fPIC makes Eigen's
+# TriangularMatrixVector emit a -Wmaybe-uninitialized FALSE POSITIVE (on `result`,
+# deep in Eigen, not in our code) that the non-PIC node executable never hits.
+# Demote only that one warning to non-fatal so it stays visible without failing
+# the build; every other warning remains a hard error.
+set(stock_plugin_compile_options -Wall -Wextra -Wpedantic -Werror -Wno-error=maybe-uninitialized)
+
+add_library(gait_sequencer_plugins SHARED
+        src/plugins/gait_sequencer_plugins.cpp
+        src/mit_controller/simple_gait_sequencer.cpp
+        src/mit_controller/adaptive_gait_sequencer.cpp
+        src/mit_controller/gait.cpp
+        src/mit_controller/mpc_trajectory_planner.cpp
+        src/mit_controller/raibert_foot_step_planner.cpp)
+target_include_directories(gait_sequencer_plugins PRIVATE ${stock_plugin_common_includes})
+ament_target_dependencies(gait_sequencer_plugins pluginlib rclcpp Eigen3 interfaces)
+target_compile_options(gait_sequencer_plugins PRIVATE ${stock_plugin_compile_options})
+
+add_library(mpc_plugins SHARED
+        src/plugins/mpc_plugins.cpp
+        src/mit_controller/mpc.cpp)
+target_include_directories(mpc_plugins PRIVATE ${stock_plugin_common_includes})
+ament_target_dependencies(mpc_plugins pluginlib rclcpp Eigen3 interfaces)
+target_link_libraries(mpc_plugins acados)
+target_compile_options(mpc_plugins PRIVATE ${stock_plugin_compile_options})
+
+add_library(slc_plugins SHARED
+        src/plugins/slc_plugins.cpp
+        src/mit_controller/swing_leg_controller.cpp
+        src/SwingTrajectory.cpp)
+target_include_directories(slc_plugins PRIVATE ${stock_plugin_common_includes})
+ament_target_dependencies(slc_plugins pluginlib rclcpp Eigen3 interfaces)
+target_compile_options(slc_plugins PRIVATE ${stock_plugin_compile_options})
+
+# wbc_arc_opt.cpp keeps its directory-scope -fpermissive source property (set for
+# mitcontrollernode above) and links fmt as header-only so the non-PIC libfmt.a
+# stays off this shared object's link line (stage_loading.md §6). Both WBC classes
+# live here because they are two instantiations of the same template interface
+# (kWBC + kWBCCartesian), registered in the one libwbc_plugins.
+add_library(wbc_plugins SHARED
+        src/plugins/wbc_plugins.cpp
+        src/mit_controller/wbc_arc_opt.cpp
+        src/mit_controller/inverse_dynamics.cpp)
+target_include_directories(wbc_plugins PRIVATE ${stock_plugin_common_includes})
+ament_target_dependencies(wbc_plugins pluginlib rclcpp Eigen3 interfaces)
+# acados is linked for its include path: ARC-OPT's hpipm solver header
+# (wbc/solvers/hpipm/HPIPMSolver.hpp) includes acados_c/dense_qp_interface.h, the
+# same reason mitcontrollernode links acados.
+target_link_libraries(wbc_plugins
+        acados
+        PkgConfig::wbc-core
+        PkgConfig::wbc-robot_models-pinocchio
+        PkgConfig::wbc-solvers-eiquadprog
+        PkgConfig::wbc-solvers-qpswift
+        PkgConfig::wbc-solvers-proxqp
+        PkgConfig::wbc-solvers-qpoases
+        PkgConfig::wbc-solvers-osqp
+        PkgConfig::wbc-scenes-acceleration_reduced_tsid
+        PkgConfig::wbc-scenes-acceleration_tsid
+        PkgConfig::wbc-controllers
+        PkgConfig::wbc-types
+        OsqpEigen::OsqpEigen
+        PkgConfig::wbc-solvers-hpipm
+        fmt::fmt-header-only)
+target_compile_options(wbc_plugins PRIVATE ${stock_plugin_compile_options})
+
+add_library(model_adaptation_plugins SHARED
+        src/plugins/model_adaptation_plugins.cpp
+        src/model_adaptation/kf_model_adaptation.cpp
+        src/model_adaptation/least_squares_model_adaptation.cpp)
+target_include_directories(model_adaptation_plugins PRIVATE ${stock_plugin_common_includes})
+ament_target_dependencies(model_adaptation_plugins pluginlib rclcpp Eigen3 interfaces)
+target_compile_options(model_adaptation_plugins PRIVATE ${stock_plugin_compile_options})
+
+# pluginlib resolves a plugin library relative to the install prefix of the
+# package that owns the description XML (this package), so the .so must land in
+# the same lib/ the exported XML points at.
+install(TARGETS
+        gait_sequencer_plugins
+        mpc_plugins
+        slc_plugins
+        wbc_plugins
+        model_adaptation_plugins
+        DESTINATION lib)
 
 
 # ##############################################################################

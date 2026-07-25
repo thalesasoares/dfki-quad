@@ -1,14 +1,22 @@
 <!--
-  Swing-leg-controller stage plugins (issue #6, M2.1).
+  Swing-leg-controller stage plugins.
 
   base_class_type: StagePlugin<SwingLegControllerInterface>
     (mit_controller/stage_plugin.hpp + mit_controller/swing_leg_controller_interface.hpp)
 
-  Empty schema-only declaration; stock wrappers land in M2.3 (issue #8). Suggested
-  stock ID (issue #8): bezier_swing.
+  Stock wrapper filled in by M2.3 (issue #8): bezier_swing, in
+  src/plugins/slc_plugins.cpp, built into libslc_plugins.
 
+  The '<' in base_class_type is XML-escaped as &lt;/&gt; (stage_loading.md §5).
   The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
   naming-agnostic per doc/modularity/plugin_lifecycle.md.
 -->
 <class_libraries>
+  <library path="libslc_plugins">
+    <class name="bezier_swing"
+           type="stock_plugins::BezierSwingPlugin"
+           base_class_type="StagePlugin&lt;SwingLegControllerInterface&gt;">
+      <description>Bezier-spline swing-foot trajectory controller (SwingLegController).</description>
+    </class>
+  </library>
 </class_libraries>

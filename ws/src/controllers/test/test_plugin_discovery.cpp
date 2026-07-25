@@ -11,9 +11,10 @@
 //      discovery" — it fails if a pluginlib_export_plugin_description_file() call is
 //      dropped or the file fails to install.
 //   2. A pluginlib::ClassLoader can be constructed for each active stage base class
-//      from the exported header + XML, and (correctly, for M2.1) reports zero
-//      declared classes. In M2.3 these same assertions flip to expecting the stock
-//      IDs, so the test grows with the milestone instead of being rewritten.
+//      from the exported header + XML, and declares exactly the stock plugin IDs
+//      M2.3 (issue #8) added. contact_logic stays empty until M3.1 (#12). This
+//      flip from "zero declared" to "the stock IDs" is the intended signal that
+//      M2.3 landed.
 //
 // Runtime note: the ament resource lives in the install space, so the CMake target
 // appends CMAKE_INSTALL_PREFIX to AMENT_PREFIX_PATH for this test (see
@@ -84,31 +85,36 @@ TEST(PluginDiscovery, ResourceListsAllDescriptionFiles) {
 }
 
 // A ClassLoader constructs for each active stage base from the exported header +
-// XML, and reports zero declared classes (M2.1 is schema-only). The constructor
-// exercising the full chain — header compiles for a consumer, XML parses, resource
-// resolves — is the point; M2.3 changes the expected count.
+// XML and declares exactly `expected_classes`. The constructor exercising the
+// full chain — header compiles for a consumer, XML parses, resource resolves — is
+// half the point; the declared-class set is the M2.3 signal.
 template <class Base>
-void ExpectLoadableWithNoClassesYet(const std::string& base_class_type) {
+void ExpectDeclaresClasses(const std::string& base_class_type, std::vector<std::string> expected_classes) {
   std::unique_ptr<pluginlib::ClassLoader<Base>> loader;
   ASSERT_NO_THROW(
       loader = std::make_unique<pluginlib::ClassLoader<Base>>("controllers", base_class_type))
       << "ClassLoader failed to construct for base " << base_class_type;
-  EXPECT_TRUE(loader->getDeclaredClasses().empty())
-      << "expected no stock plugins in M2.1 for base " << base_class_type;
+  std::vector<std::string> declared = loader->getDeclaredClasses();
+  std::sort(declared.begin(), declared.end());
+  std::sort(expected_classes.begin(), expected_classes.end());
+  EXPECT_EQ(declared, expected_classes) << "unexpected declared classes for base " << base_class_type;
 }
 
-TEST(PluginDiscovery, ClassLoaderConstructsForEachStageBase) {
-  ExpectLoadableWithNoClassesYet<StagePlugin<GaitSequencerInterface>>(
-      "StagePlugin<GaitSequencerInterface>");
-  ExpectLoadableWithNoClassesYet<StagePlugin<MPCInterface>>("StagePlugin<MPCInterface>");
-  ExpectLoadableWithNoClassesYet<StagePlugin<SwingLegControllerInterface>>(
-      "StagePlugin<SwingLegControllerInterface>");
-  ExpectLoadableWithNoClassesYet<StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>(
-      "StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>");
-  ExpectLoadableWithNoClassesYet<StagePlugin<ModelAdaptationInterface>>(
-      "StagePlugin<ModelAdaptationInterface>");
-  ExpectLoadableWithNoClassesYet<StagePlugin<ContactLogicInterface>>(
-      "StagePlugin<ContactLogicInterface>");
+TEST(PluginDiscovery, ClassLoaderDeclaresStockPluginsForEachStageBase) {
+  ExpectDeclaresClasses<StagePlugin<GaitSequencerInterface>>(
+      "StagePlugin<GaitSequencerInterface>", {"simple_gait", "adaptive_gait"});
+  ExpectDeclaresClasses<StagePlugin<MPCInterface>>("StagePlugin<MPCInterface>", {"acados_mpc"});
+  ExpectDeclaresClasses<StagePlugin<SwingLegControllerInterface>>(
+      "StagePlugin<SwingLegControllerInterface>", {"bezier_swing"});
+  ExpectDeclaresClasses<StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>(
+      "StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>", {"wbc_arc_opt"});
+  ExpectDeclaresClasses<StagePlugin<WBCInterface<CartesianCommands>>>(
+      "StagePlugin<WBCInterface<CartesianCommands>>", {"inverse_dynamics"});
+  ExpectDeclaresClasses<StagePlugin<ModelAdaptationInterface>>(
+      "StagePlugin<ModelAdaptationInterface>", {"kf_adaptation", "rls_adaptation"});
+  // Contact logic stays schema-only until M3.1 (#12) adds the contact class.
+  ExpectDeclaresClasses<StagePlugin<ContactLogicInterface>>(
+      "StagePlugin<ContactLogicInterface>", {});
 }
 
 }  // namespace

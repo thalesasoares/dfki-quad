@@ -293,30 +293,40 @@ TEST(StageLoader, BaseClassStringsMatchThePluginSchema) {
   EXPECT_EQ(std::string(stage_plugin_bases::kSwingLegController), "StagePlugin<SwingLegControllerInterface>");
   EXPECT_EQ(std::string(stage_plugin_bases::kWBC),
             "StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>");
+  EXPECT_EQ(std::string(stage_plugin_bases::kWBCCartesian), "StagePlugin<WBCInterface<CartesianCommands>>");
   EXPECT_EQ(std::string(stage_plugin_bases::kModelAdaptation), "StagePlugin<ModelAdaptationInterface>");
   EXPECT_EQ(std::string(stage_plugin_bases::kContactLogic), "StagePlugin<ContactLogicInterface>");
   EXPECT_EQ(std::string(kStagePluginPackage), "controllers");
 }
 
 // The production loaders — built through ament index discovery, no explicit XML —
-// construct for every stage base and, correctly for M2.2, declare no classes:
-// the stock wrappers are M2.3 (#8). This is test_plugin_discovery.cpp's assertion
-// re-run through the API the host will actually use, so if StageLoader ever stops
-// pointing at the same package/resource as a bare ClassLoader, it fails here.
+// construct for every stage base and declare exactly the stock IDs M2.3 (#8)
+// added. This is test_plugin_discovery.cpp's assertion re-run through the API the
+// host will actually use, so if StageLoader ever stops pointing at the same
+// package/resource as a bare ClassLoader, it fails here. contact_logic stays
+// empty until M3.1 (#12).
 template <class StageInterface>
-void ExpectProductionLoaderIsEmpty(const char* base_class_type) {
+void ExpectProductionLoaderDeclares(const char* base_class_type, std::vector<std::string> expected) {
   StageLoader<StageInterface> loader(base_class_type);
-  EXPECT_TRUE(loader.DeclaredClasses().empty())
-      << "expected no stock plugins yet for base " << base_class_type;
+  std::vector<std::string> declared = loader.DeclaredClasses();
+  std::sort(declared.begin(), declared.end());
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(declared, expected) << "unexpected declared classes for base " << base_class_type;
 }
 
-TEST(StageLoader, ProductionLoadersConstructForEveryStageBaseAndAreEmptyUntilM23) {
-  ExpectProductionLoaderIsEmpty<GaitSequencerInterface>(stage_plugin_bases::kGaitSequencer);
-  ExpectProductionLoaderIsEmpty<MPCInterface>(stage_plugin_bases::kMPC);
-  ExpectProductionLoaderIsEmpty<SwingLegControllerInterface>(stage_plugin_bases::kSwingLegController);
-  ExpectProductionLoaderIsEmpty<WBCInterface<JointTorqueVelocityPositionCommands>>(stage_plugin_bases::kWBC);
-  ExpectProductionLoaderIsEmpty<ModelAdaptationInterface>(stage_plugin_bases::kModelAdaptation);
-  ExpectProductionLoaderIsEmpty<ContactLogicInterface>(stage_plugin_bases::kContactLogic);
+TEST(StageLoader, ProductionLoadersDeclareStockPluginsForEveryStageBase) {
+  ExpectProductionLoaderDeclares<GaitSequencerInterface>(stage_plugin_bases::kGaitSequencer,
+                                                         {"simple_gait", "adaptive_gait"});
+  ExpectProductionLoaderDeclares<MPCInterface>(stage_plugin_bases::kMPC, {"acados_mpc"});
+  ExpectProductionLoaderDeclares<SwingLegControllerInterface>(stage_plugin_bases::kSwingLegController,
+                                                             {"bezier_swing"});
+  ExpectProductionLoaderDeclares<WBCInterface<JointTorqueVelocityPositionCommands>>(stage_plugin_bases::kWBC,
+                                                                                    {"wbc_arc_opt"});
+  ExpectProductionLoaderDeclares<WBCInterface<CartesianCommands>>(stage_plugin_bases::kWBCCartesian,
+                                                                  {"inverse_dynamics"});
+  ExpectProductionLoaderDeclares<ModelAdaptationInterface>(stage_plugin_bases::kModelAdaptation,
+                                                           {"kf_adaptation", "rls_adaptation"});
+  ExpectProductionLoaderDeclares<ContactLogicInterface>(stage_plugin_bases::kContactLogic, {});
 }
 
 }  // namespace
