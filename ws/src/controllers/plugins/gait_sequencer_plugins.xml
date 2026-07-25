@@ -1,25 +1,33 @@
 <!--
-  Gait sequencer stage plugins (issue #6, M2.1).
+  Gait sequencer stage plugins.
 
   base_class_type: StagePlugin<GaitSequencerInterface>
     (mit_controller/stage_plugin.hpp + mit_controller/gait_sequencer_interface.hpp)
 
-  This file defines the discovery point for gait-sequencer plugins. It ships with
-  no <library>/<class> entries yet: M2.1 exports the surface and the schema only.
-  The stock wrappers land in M2.3 (issue #8) as, e.g.:
+  Stock wrappers filled in by M2.3 (issue #8): simple_gait, adaptive_gait. bio_gait
+  is deferred to M4.1 (#16). The wrappers live in
+  src/plugins/gait_sequencer_plugins.cpp, built into libgait_sequencer_plugins.
 
-    <library path="libgait_sequencer_plugins">
-      <class name="simple_gait"
-             type="SimpleGaitSequencerPlugin"
-             base_class_type="StagePlugin<GaitSequencerInterface>">
-        <description>...</description>
-      </class>
-      <class name="adaptive_gait" .../>   <!-- bio_gait waits for M4.1 (#16) -->
-    </library>
+  The '<' in base_class_type must be XML-escaped as &lt;/&gt;: tinyxml2 unescapes
+  before pluginlib compares against stage_plugin_bases::kGaitSequencer, so the
+  escaped spelling and the C++ string match (stage_loading.md §5).
 
-  Suggested stock IDs (issue #8): simple_gait, adaptive_gait.
   The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
   naming-agnostic per doc/modularity/plugin_lifecycle.md.
 -->
 <class_libraries>
+  <library path="libgait_sequencer_plugins">
+    <class name="simple_gait"
+           type="stock_plugins::SimpleGaitSequencerPlugin"
+           base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;">
+      <description>Fixed-gait sequencer (SimpleGaitSequencer): a gait from the gait database or a
+        manual gait, with Raibert foot-step planning.</description>
+    </class>
+    <class name="adaptive_gait"
+           type="stock_plugins::AdaptiveGaitSequencerPlugin"
+           base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;">
+      <description>Velocity-adaptive gait sequencer (AdaptiveGaitSequencer): adapts period, duty
+        factor and phase offsets to the commanded velocity.</description>
+    </class>
+  </library>
 </class_libraries>

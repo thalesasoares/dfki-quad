@@ -66,14 +66,20 @@ includes all of these too, so any regression to their self-containment fails the
 
 One description file per stage base class, under `plugins/`:
 
-| File | `base_class_type` |
-|---|---|
-| `gait_sequencer_plugins.xml` | `StagePlugin<GaitSequencerInterface>` |
-| `mpc_plugins.xml` | `StagePlugin<MPCInterface>` |
-| `slc_plugins.xml` | `StagePlugin<SwingLegControllerInterface>` |
-| `wbc_plugins.xml` | `StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>` |
-| `model_adaptation_plugins.xml` | `StagePlugin<ModelAdaptationInterface>` |
-| `contact_logic_plugins.xml` | `StagePlugin<ContactLogicInterface>` |
+| File | `base_class_type` | Stock classes (M2.3, #8) |
+|---|---|---|
+| `gait_sequencer_plugins.xml` | `StagePlugin<GaitSequencerInterface>` | `simple_gait`, `adaptive_gait` |
+| `mpc_plugins.xml` | `StagePlugin<MPCInterface>` | `acados_mpc` |
+| `slc_plugins.xml` | `StagePlugin<SwingLegControllerInterface>` | `bezier_swing` |
+| `wbc_plugins.xml` | `StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>` | `wbc_arc_opt` |
+| `wbc_plugins.xml` | `StagePlugin<WBCInterface<CartesianCommands>>` | `inverse_dynamics` |
+| `model_adaptation_plugins.xml` | `StagePlugin<ModelAdaptationInterface>` | `kf_adaptation`, `rls_adaptation` |
+| `contact_logic_plugins.xml` | `StagePlugin<ContactLogicInterface>` | — (M3.1, #12) |
+
+`wbc_plugins.xml` declares **two** base-class-types in one library because `WBCInterface` is still a
+template: `wbc_arc_opt` under the `JointTorqueVelocityPositionCommands` instantiation and
+`inverse_dynamics` under the `CartesianCommands` one (`stage_plugin_bases::kWBCCartesian`, added in
+M2.3). #13 (M3.2) collapses them into one once the interface is de-templated.
 
 **These base-class-type strings are the schema.** M2.2's loader helper and M2.3's wrapper
 `PLUGINLIB_EXPORT_CLASS` calls must use them verbatim. Changing one requires updating this file, the
@@ -84,9 +90,9 @@ table.
 
 **In XML they must be escaped.** `<` is not legal in an attribute value, so a real `<class>` entry
 reads `base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;"`; tinyxml2 unescapes before
-pluginlib compares against the C++-side string. The files below carry the base strings in comments
-only, so this did not bite in M2.1 — M2.3 must get it right, and
-[`stage_loading.md`](stage_loading.md) §5 has a working example.
+pluginlib compares against the C++-side string. M2.3's `<class>` entries use the escaped spelling
+(the WBC ones nest it: `StagePlugin&lt;WBCInterface&lt;CartesianCommands&gt;&gt;`); see
+[`stage_loading.md`](stage_loading.md) §5.
 
 Design decisions:
 
@@ -95,17 +101,20 @@ Design decisions:
   (M3.2) reworks **only** `wbc_plugins.xml` when the WBC interface is de-templated
   ([`plugin_lifecycle.md`](plugin_lifecycle.md) §6). Isolating the WBC declaration now contains that
   future churn.
-- **Empty class lists in M2.1.** Each file is a `<class_libraries>` root documenting its base string
-  and the suggested stock IDs, with no `<library>`/`<class>` entries yet. `pluginlib` accepts this
-  (a `class_libraries` root with zero `library` children → zero declared classes), and it commits to
-  no shared-library layout — that is an M2.3 decision. The `type:` key vocabulary is M2.5's (#10);
-  these files are naming-agnostic.
+- **Class lists filled in M2.3.** M2.1 shipped each file as an empty `<class_libraries>` root
+  (`pluginlib` reads that as zero declared classes); M2.3 (#8) added one `<library>` per stage —
+  `libgait_sequencer_plugins`, `libmpc_plugins`, `libslc_plugins`, `libwbc_plugins`,
+  `libmodel_adaptation_plugins` — each with the stock `<class>` entries above. `contact_logic_plugins.xml`
+  stays empty until M3.1 (#12). The `type:` key vocabulary is M2.5's (#10); these files are
+  naming-agnostic (the `name=` values are the suggested stock IDs).
 - **The contact file is defined now.** `ContactLogicInterface` was frozen in M1.4 and
   `StagePlugin<ContactLogicInterface>` already compiles, so issue #6's "(and Contact when ready)" is
   satisfiable today. M3.1 (#12) becomes purely additive.
-- **The WBC base is the Go2 instantiation.** `WBCInterface` is still a class template (gap G8), so
-  the M2 Go2 product path registers the `JointTorqueVelocityPositionCommands` instantiation; the
-  ULab/Cartesian path stays on the compile-time factory until #13
+- **Two WBC bases until #13.** `WBCInterface` is still a class template (gap G8), so M2.3 registers
+  the Go2 `JointTorqueVelocityPositionCommands` instantiation (`wbc_arc_opt`) and the
+  ULab/Cartesian `CartesianCommands` instantiation (`inverse_dynamics`) as two `base_class_type`s in
+  the one `libwbc_plugins`. Both are stock plugins now (issue #8 wanted every current algorithm
+  exported); #13 (M3.2) collapses the two bases into one when the interface is de-templated
   ([`plugin_lifecycle.md`](plugin_lifecycle.md) §6).
 
 Each file is registered with `pluginlib_export_plugin_description_file(controllers plugins/<f>.xml)`,

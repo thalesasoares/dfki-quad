@@ -1,14 +1,22 @@
 <!--
-  MPC stage plugins (issue #6, M2.1).
+  MPC stage plugins.
 
   base_class_type: StagePlugin<MPCInterface>
     (mit_controller/stage_plugin.hpp + mit_controller/mpc_interface.hpp)
 
-  Empty schema-only declaration; stock wrappers land in M2.3 (issue #8). Suggested
-  stock ID (issue #8): acados_mpc.
+  Stock wrapper filled in by M2.3 (issue #8): acados_mpc, in
+  src/plugins/mpc_plugins.cpp, built into libmpc_plugins.
 
+  The '<' in base_class_type is XML-escaped as &lt;/&gt; (stage_loading.md §5).
   The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
   naming-agnostic per doc/modularity/plugin_lifecycle.md.
 -->
 <class_libraries>
+  <library path="libmpc_plugins">
+    <class name="acados_mpc"
+           type="stock_plugins::AcadosMpcPlugin"
+           base_class_type="StagePlugin&lt;MPCInterface&gt;">
+      <description>Convex MPC over ground reaction forces solved with acados (MPC).</description>
+    </class>
+  </library>
 </class_libraries>
