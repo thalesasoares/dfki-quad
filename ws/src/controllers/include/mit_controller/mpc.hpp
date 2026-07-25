@@ -12,7 +12,9 @@
 
 class MPC : public MPCInterface {
  public:
-  static constexpr int STATE_SIZE = 13;
+  // Defined by the exported pipeline constant so the host can size/validate the
+  // state weight vectors without including this header (issue #9, M2.4).
+  static constexpr int STATE_SIZE = MPC_STATE_SIZE;
   static constexpr int NUM_FEET = N_LEGS;
   static constexpr int INPUT_SIZE = 3 * NUM_FEET;
   static constexpr int PREDICTION_HORIZON = MPC_PREDICTION_HORIZON;

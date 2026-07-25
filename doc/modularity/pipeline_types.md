@@ -78,6 +78,7 @@ contracts are written against. All are `static constexpr`, so they cost nothing 
 | `N_JOINTS_PER_LEG` | 3 | joints per leg |
 | `GAIT_SEQUENCE_SIZE` | 100 | knots in a `GaitSequence` |
 | `MPC_PREDICTION_HORIZON` | 10 | MPC horizon steps |
+| `MPC_STATE_SIZE` | 13 | MPC state vector length; `MPC::STATE_SIZE` is defined as it (M2.4) |
 | `MPC_DT` | 0.05 s | spacing between gait-sequence / MPC knots |
 | `MPC_CONTROL_DT` | 0.01 s | MPC loop period (100 Hz) |
 | `SWING_LEG_DT` | 0.002 s | swing-leg loop period (500 Hz) |
