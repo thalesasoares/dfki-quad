@@ -79,7 +79,7 @@ dangling vtable ([`plugin_lifecycle.md`](plugin_lifecycle.md) §5). Two things e
 - **`StageLoader` is non-copyable and non-movable.** A loader cannot be moved out from under the
   instances it created.
 - **The host declares loaders before stage pointers.** Members are destroyed in reverse declaration
-  order, so this makes the ordering correct by construction. M2.4 (#9) must follow it:
+  order, so this makes the ordering correct by construction. M2.4 (#9) does:
 
   ```cpp
   StageLoader<GaitSequencerInterface> gs_loader_{stage_plugin_bases::kGaitSequencer};  // declared FIRST
@@ -123,8 +123,10 @@ nothing in this layer. The key lives in the same flat parameter map as every oth
 (the one key-space of [`plugin_lifecycle.md`](plugin_lifecycle.md) §3) rather than in a second
 channel, so start-up configuration stays one vocabulary.
 
-This supersedes the legacy `gait_sequencer` parameter (`"Simple"` / `"Adaptive"` / `"Bio"`,
-`mit_controller_node.cpp:256`), which M2.4/M2.5 retire. M2.2 does not touch it.
+This supersedes the legacy `gait_sequencer` parameter (`"Simple"` / `"Adaptive"` / `"Bio"`),
+which M2.4/M2.5 retire. M2.2 does not touch it. M2.4 keeps it alive as the *default* of `gs.type`
+so that YAMLs written before M2.5 still select the same sequencer — the derivation, and its
+removal in #23, are [`pipeline_host.md`](pipeline_host.md) §2.
 
 ## 5. The base-class-type strings, and escaping them in XML
 
@@ -168,7 +170,9 @@ The design constraints that keep it that way once the host does use it:
 - **No new per-cycle indirection.** The host keeps calling stages through the single virtual dispatch
   it already uses (`unique_ptr<Interface>`); `StageLoader` returns a pointer to the *same* interface
   and then steps out of the way. Nothing in this header is on a per-cycle path — there is no loader
-  lookup, no string comparison and no map access per control step, and M2.4 must keep it that way.
+  lookup, no string comparison and no map access per control step, and M2.4 keeps it that way —
+  its only per-cycle addition is the stock wrapper's forwarding call
+  ([`pipeline_host.md`](pipeline_host.md) §6).
 - **Zero cost to non-users.** `stage_loader.hpp` is a template header including only
   `stage_plugin.hpp` and pluginlib, so a translation unit pays only for the bases it instantiates.
 
@@ -244,7 +248,7 @@ colcon test-result --verbose
 | #6 | [M2.1] pluginlib dependency and plugin description XML | Provides the schema and exported surface this consumes — [`plugin_discovery.md`](plugin_discovery.md) |
 | #7 | [M2.2] Stage plugin base + loader helper | **This document** |
 | #8 | [M2.3] Wrap existing stages as stock plugins | Fills the `<class>` entries the loader resolves; must escape the base strings (§5) and solve the non-PIC link (§6) |
-| #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | First consumer: owns the loaders, declares them before the stage pointers (§3), keeps per-cycle dispatch unchanged (§6) |
+| #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | First consumer: owns the loaders, declares them before the stage pointers (§3), keeps per-cycle dispatch unchanged (§6) — [`pipeline_host.md`](pipeline_host.md) |
 | #10 | [M2.5] YAML schema for stage selection | Ratifies or renames the `<stage>.type` convention (§4) |
 | #12 | [M3.1] Extract contact FSM | Uses `StageLoader<ContactLogicInterface>` unchanged |
 | #13 | [M3.2] Runtime WBC / command-type profile | Collapses the WBC instantiation; `stage_plugin_bases::kWBC` changes with the XML |

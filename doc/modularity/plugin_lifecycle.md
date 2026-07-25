@@ -5,12 +5,14 @@ landed: `stage_plugin.hpp` and the stage interfaces are exported and the plugin 
 defined — see [`plugin_discovery.md`](plugin_discovery.md). M2.2 landed: `StageLoader` drives the
 create → `Init` path and the fail-fast errors — see [`stage_loading.md`](stage_loading.md). M2.3
 landed: the eight stock wrappers (§4) around GS/MPC/SLC/WBC/MA are built, declared and tested — see
-[`stock_plugins.md`](stock_plugins.md). ·
+[`stock_plugins.md`](stock_plugins.md). M2.4 landed: the host constructs no algorithm and loads all
+five stages through this lifecycle — see [`pipeline_host.md`](pipeline_host.md). ·
 **Applies to:** `ws/src/controllers` ·
 **Companion documents:** [`stage_contracts.md`](stage_contracts.md) — the frozen stage APIs ·
 [`pipeline_types.md`](pipeline_types.md) — the data they exchange ·
 [`plugin_discovery.md`](plugin_discovery.md) — the M2.1 dependency, exported surface and XML schema ·
-[`stage_loading.md`](stage_loading.md) — the M2.2 loader that implements this contract
+[`stage_loading.md`](stage_loading.md) — the M2.2 loader that implements this contract ·
+[`pipeline_host.md`](pipeline_host.md) — the M2.4 host that drives it
 
 `stage_contracts.md` froze *what* each stage does; this document specifies *how a stage comes to
 life* once stages are loaded through `pluginlib` (milestone M2). It exists because the two are in
@@ -37,9 +39,10 @@ class StagePlugin : public StageInterface {
 Each stage's pluginlib base class is its instantiation — `StagePlugin<GaitSequencerInterface>`,
 `StagePlugin<MPCInterface>`, `StagePlugin<SwingLegControllerInterface>`,
 `StagePlugin<ModelAdaptationInterface>`, `StagePlugin<ContactLogicInterface>` (from M3.1), and for
-the WBC an instantiation per joint command type (§6). The host keeps owning stages as
-`unique_ptr<Interface>` exactly as documented in stage_contracts.md; `Init` is a loader-time
-concern only.
+the WBC an instantiation per joint command type (§6). The host owns stages as owning pointers to
+the frozen interface — since M2.4 that is pluginlib's `UniquePtr` rather than `std::unique_ptr`, a
+deleter-only difference explained in [`stage_loading.md`](stage_loading.md) §3; `Init` is a
+loader-time concern only.
 
 ## 1. Rules
 
@@ -97,12 +100,16 @@ mapping, `Eigen::Map` reshaping, length assertions — moves into the wrapper's 
 precisely how M2.4's "no concrete algorithm factory if/else left in the host" criterion is met: the
 factory bodies don't disappear, they relocate behind the plugin boundary.
 
-**How the keys get declared.** Today the host `declare_parameter`s all 88 keys explicitly. It
-cannot pre-declare keys of plugins it has never heard of, so with M2.4 the host node enables
-`automatically_declare_parameters_from_overrides(true)`: whatever the selected YAML provides
-becomes a parameter, the host harvests all of it into `params`, and validation moves where the
-knowledge is — the stage (`Require`). The existing explicit declarations may stay during the
-transition; they are compatible.
+**How the keys get declared.** The host `declare_parameter`s all 88 keys explicitly and, as of M2.4,
+still does — it harvests the whole declared set into `params` and lets each stage pick what it
+documents. Switching to `automatically_declare_parameters_from_overrides(true)`, which is what a host
+would need to pre-declare keys of plugins it has never heard of, was deliberately *not* part of M2.4:
+an auto-declared parameter takes its type from the YAML literal, so a `200` written where a stage
+expects a `double` would arrive as an integer and turn a working configuration into a
+`StageInitError`. Declared types are what reject that at override-load time today. The switch
+therefore belongs with the YAML/parameter-reference work (#10, #21) or with the first genuinely
+out-of-package plugin (#17), where the YAMLs can be audited in the same change; until then a stage
+outside the host's declaration list is configured through launch-time parameter overrides.
 
 ## 4. Stock plugins wrap, they do not modify (M2.3)
 
@@ -139,11 +146,13 @@ change" is auditable from the wrapper against the cited host lines. See
   the stage rejects — rebuild the gait sequencer from scratch and swap it under
   `gait_sequencer_lock_` (`mit_controller_node.cpp:399-408`) — generalises: create a fresh instance
   via the loader, `Init` it off-loop, swap the pointer under the stage's lock, destroy the old
-  instance after the swap.
+  instance after the swap. M2.4 implements exactly that, and keeps a reload failure non-fatal —
+  [`pipeline_host.md`](pipeline_host.md) §5.
 - **The `ClassLoader` outlives its instances.** Destroying a `pluginlib::ClassLoader` unloads the
-  library; any surviving instance is then a dangling vtable. The host (M2.4) owns one loader per
-  stage base class as a member declared *before* the stage pointers, so destruction order is
-  correct by construction. The M2.2 loader helper must preserve this property.
+  library; any surviving instance is then a dangling vtable. The host owns one loader per stage
+  base class as a member declared *before* the stage pointers, so destruction order is correct by
+  construction (M2.4, [`pipeline_host.md`](pipeline_host.md) §4). The M2.2 loader helper preserves
+  this property.
 
 ## 6. The WBC instantiations
 
@@ -174,7 +183,7 @@ the interface headers need (pipeline_types.md §6).
 | #6 | [M2.1] pluginlib dependency and plugin description XML | Exports `stage_plugin.hpp`; XML names the `StagePlugin<…>` bases — [`plugin_discovery.md`](plugin_discovery.md) |
 | #7 | [M2.2] Stage plugin base + loader helper | **Implements this contract** — `StageLoader` resolves `type:`, default-constructs, calls `Init`, translates `StageInitError` into the fail-fast path; `Create` is the §5 swap path — [`stage_loading.md`](stage_loading.md) |
 | #8 | [M2.3] Wrap existing stages as stock plugins | §4 — adapter wrappers whose `Init` bodies are today's host factory code |
-| #9 | [M2.4] Thin PipelineHost | §3 declaration strategy, §5 loader lifetime and swap-under-lock |
+| #9 | [M2.4] Thin PipelineHost | **Drives this contract** — five loads at bring-up, the §5 swap on reconfiguration — [`pipeline_host.md`](pipeline_host.md) |
 | #10 | [M2.5] YAML schema for stage selection | Owns the `type:` keys and any parameter renaming; this contract is naming-agnostic |
 | #13 | [M3.2] Runtime WBC / command-type profile | §6 — collapses the WBC instantiations into one base |
 | #12 | [M3.1] Extract contact FSM | Adds the `StagePlugin<ContactLogicInterface>` base |

@@ -148,7 +148,9 @@ optimisation flags and binary behaviour are unchanged; removing the dead include
 compile time. `pluginlib` costs only at *load* time (library `dlopen` at bring-up), never in the
 control loops — and in M2.1 nothing is loaded yet. The performance discipline to carry forward:
 **M2.3** stock-plugin `.so`s must keep today's optimisation flags, and **M2.4** must keep calling
-stages through the existing `unique_ptr<Interface>` indirection (no new per-cycle indirection).
+stages through the existing single virtual indirection. Both held: the libraries inherit the node's
+Release flags, and the only per-cycle addition is the stock wrapper's forwarding call
+([`pipeline_host.md`](pipeline_host.md) §6).
 
 ## 6. Related issues
 
@@ -158,7 +160,7 @@ stages through the existing `unique_ptr<Interface>` indirection (no new per-cycl
 | #6 | [M2.1] pluginlib dependency and plugin description XML | **This document** |
 | #7 | [M2.2] Stage plugin base + loader helper | Consumes the base-class-type strings — [`stage_loading.md`](stage_loading.md) |
 | #8 | [M2.3] Wrap existing stages as stock plugins | Fills the `<class>` entries; flips the discovery test's expected count |
-| #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns the loaders; keeps per-cycle indirection unchanged |
+| #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns the loaders; keeps per-cycle indirection unchanged — [`pipeline_host.md`](pipeline_host.md) |
 | #10 | [M2.5] YAML schema for stage selection | Owns the `type:` key vocabulary |
 | #12 | [M3.1] Extract contact FSM | Populates `contact_logic_plugins.xml` |
 | #13 | [M3.2] Runtime WBC / command-type profile | Reworks `wbc_plugins.xml` once the interface is de-templated |
