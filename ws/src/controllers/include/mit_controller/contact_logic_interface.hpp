@@ -23,12 +23,10 @@
  * the state, running the per-leg early/late/lost-contact FSM and overriding the
  * WBC inputs — contact flags, wrenches and foot targets — accordingly.
  *
- * The logic today lives inline in `MITController::ControlLoopCallback`
- * (mit_controller_node.cpp:989-1109) with the FSM states as a private enum
- * (mit_controller_node.hpp:50). This header only *specifies* the API (issue #4,
- * M1.4). Extracting the implementation into a stock `DefaultContactLogic`
- * plugin, and wiring the host to call it, is issue #12 (M3.1). Until then the
- * host is unchanged and no code constructs this interface.
+ * This header specifies the API (issue #4, M1.4). The implementation was
+ * extracted out of `MITController::ControlLoopCallback` into the stock
+ * `DefaultContactLogic` plugin in issue #12 (M3.1), which is also where the host
+ * started loading and calling the stage like the other five.
  *
  * ## Placement in the pipeline
  * The host runs this stage inside the 500 Hz control loop, after it has copied
@@ -36,14 +34,37 @@
  * leg controller outputs, and before it feeds the reconciled results to the
  * `WBCInterface`. See the call-order and threading notes on `Reconcile`.
  */
+/**
+ * The runtime parameter keys of the contact stage.
+ *
+ * These are the four detection toggles the FSM reads. They are named here, on
+ * the shared contract, rather than spelled as literals on either side: the host
+ * declares them and routes `SetParameter` by them (mit_controller_node.cpp), the
+ * stock plugin reads them in `Init` and recognises them in `SetParameter`
+ * (src/plugins/contact_logic_plugins.cpp), and start-up configuration and runtime
+ * reconfiguration are one vocabulary (plugin_lifecycle.md §3). Promoting them
+ * from the prose of `SetParameter` below to constants in M3.1 (issue #12) is what
+ * keeps the two sides from drifting.
+ *
+ * The host also still accepts the pre-M3.1 flat spelling (`early_contact_detection`
+ * and friends) and bridges it onto these keys; that bridge is host-only and goes
+ * away with #23 (M5.4). See `stage_selection.hpp`.
+ */
+namespace contact_logic_params {
+inline constexpr char kEarlyContactDetection[] = "contact_logic.early_contact_detection";
+inline constexpr char kLateContactDetection[] = "contact_logic.late_contact_detection";
+inline constexpr char kLostContactDetection[] = "contact_logic.lost_contact_detection";
+inline constexpr char kLateContactRescheduleSwingPhase[] = "contact_logic.late_contact_reschedule_swing_phase";
+}  // namespace contact_logic_params
+
 class ContactLogicInterface {
  protected:
   ContactLogicInterface() = default;  // protected, as there cant be any Object from an Interface
 
  public:
   /**
-   * Per-leg reconciliation status. Mirrors the private `MITController::LegStatus`
-   * (mit_controller_node.hpp:50) the extraction will replace.
+   * Per-leg reconciliation status. Replaces the private `MITController::LegStatus`
+   * the extraction (issue #12, M3.1) removed from the host.
    *   - STANCE:        scheduled and sensed in contact.
    *   - SWING:         scheduled and sensed off the ground.
    *   - EARLY_CONTACT: sensed contact while still scheduled to swing; the foot is
@@ -151,7 +172,8 @@ class ContactLogicInterface {
    * foot targets (hold positions with zero velocity/acceleration where the FSM
    * overrides the plan). All three are in/out: the host seeds them with
    * `wrench_sequence.forces[0]`, the SLC `feet_targets` and
-   * `gait_sequence.contact_sequence[0]`, exactly as the inline code does today.
+   * `gait_sequence.contact_sequence[0]`, exactly as the pre-extraction inline
+   * code did.
    *
    * @param contacts     in/out: per-leg stance flags, reconciled in place
    * @param wrenches     in/out: per-leg ground-reaction forces, reconciled in place
@@ -180,11 +202,9 @@ class ContactLogicInterface {
    * Applies a runtime parameter to this stage. Same contract as the other five
    * stages: called from the host parameter-event callback with the stage's mutex
    * held, never from the control loops; returns false for unrecognised keys (the
-   * host logs a warning). The keys are the four detection toggles the FSM reads
-   * today — `contact_logic.early_contact_detection`,
-   * `contact_logic.late_contact_detection`, `contact_logic.lost_contact_detection`
-   * and `contact_logic.late_contact_reschedule_swing_phase`. They are wired into
-   * the host in M3.1 (issue #12).
+   * host logs a warning). The keys are the four detection toggles the FSM reads,
+   * named in `contact_logic_params` above; the host wired them up in M3.1
+   * (issue #12).
    *
    * @param name the full ROS parameter name
    * @param value the new parameter value

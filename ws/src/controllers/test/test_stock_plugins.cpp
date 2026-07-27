@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include "mit_controller/contact_logic_interface.hpp"
 #include "mit_controller/feet_targets.hpp"
 #include "mit_controller/gait_sequence.hpp"
 #include "mit_controller/gait_sequencer_interface.hpp"
@@ -72,6 +73,12 @@ ParamMap BaseParams() {
   // Inverse-dynamics WBC required keys.
   p.emplace("wbc.inverse_dynamics.foot_position_based_on_target_height", rclcpp::ParameterValue(false));
   p.emplace("wbc.inverse_dynamics.foot_position_based_on_target_orientation", rclcpp::ParameterValue(false));
+  // Contact logic required keys (issue #12, M3.1) — the ratified nested spelling,
+  // which is what the host declares and hands to Init.
+  p.emplace(contact_logic_params::kEarlyContactDetection, rclcpp::ParameterValue(true));
+  p.emplace(contact_logic_params::kLateContactDetection, rclcpp::ParameterValue(false));
+  p.emplace(contact_logic_params::kLostContactDetection, rclcpp::ParameterValue(false));
+  p.emplace(contact_logic_params::kLateContactRescheduleSwingPhase, rclcpp::ParameterValue(true));
   return p;
 }
 
@@ -134,6 +141,38 @@ TEST(StockPlugins, BezierSwingLoadsInitialisesAndRuns) {
   std::array<double, N_LEGS> progress{};
   std::array<SwingLegControllerInterface::LegState, N_LEGS> states{};
   plugin->GetProgress(progress, states);
+}
+
+// The contact stage is the one stock plugin with no solver and no external
+// library behind it, so unlike the WBC/MPC entries above it can be driven a full
+// cycle here: load, Init, one Reconcile through the frozen interface.
+TEST(StockPlugins, DefaultContactLogicLoadsInitialisesAndRuns) {
+  StageLoader<ContactLogicInterface> loader(stage_plugin_bases::kContactLogic);
+  auto plugin = loader.Load(kTypeKey, MakeInit("default_contact_logic", BaseParams()));
+  ASSERT_NE(plugin, nullptr);
+  plugin->UpdateState(BrickState{});
+  plugin->UpdateGaitSequence(GaitSequence{});
+  plugin->UpdateWrenchSequence(WrenchSequence{});
+  std::array<double, N_LEGS> progress{};
+  std::array<SwingLegControllerInterface::LegState, N_LEGS> swing_states{};
+  plugin->UpdateSwingLegState(FeetTargets{}, progress, swing_states);
+
+  ContactLogicInterface::FootContacts contacts{};
+  ContactLogicInterface::Wrenches wrenches{};
+  FeetTargets feet_targets{};
+  plugin->Reconcile(contacts, wrenches, feet_targets);
+
+  std::array<ContactLogicInterface::LegContactState, N_LEGS> states{};
+  plugin->GetLegContactStates(states);
+  ContactLogicInterface::ContactEvents events{};
+  plugin->GetContactEvents(events);
+}
+
+TEST(StockPlugins, DefaultContactLogicMissingRequiredKeyThrows) {
+  StageLoader<ContactLogicInterface> loader(stage_plugin_bases::kContactLogic);
+  ParamMap params = BaseParams();
+  params.erase(contact_logic_params::kEarlyContactDetection);
+  EXPECT_THROW(loader.Load(kTypeKey, MakeInit("default_contact_logic", params)), StageInitError);
 }
 
 TEST(StockPlugins, InverseDynamicsLoadsAndInitialises) {

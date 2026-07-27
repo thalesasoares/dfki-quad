@@ -7,7 +7,7 @@
 // property of those *files*, so this test reads the installed YAMLs and pins it
 // instead of leaving it to a reviewer's eye:
 //
-//   1. All five keys are present, string-typed and non-empty, spelled with the
+//   1. All six keys are present, string-typed and non-empty, spelled with the
 //      stage_selection::k*TypeKey constants — so renaming a key breaks a test.
 //      That is deliberate: M2.5 ratified the vocabulary (stage_loading.md §4),
 //      and a later rename should be a conscious edit here, not a silent drift
@@ -23,6 +23,11 @@
 //      files. Two spellings of one choice must not coexist: with an explicit
 //      `*.type` present the legacy key is a decoy that silently does nothing.
 //
+// M3.1 (#12) added the sixth stage, `contact_logic.type`. Its four *tuning* keys
+// keep their pre-M3.1 flat spelling in these files on purpose: unlike a selector,
+// a flat toggle still has an effect (the host declares the nested key with it as
+// the default), so it is not a decoy. #23 (M5.4) migrates them.
+//
 // (2) uses production ament discovery, so the CMake target appends
 // CMAKE_INSTALL_PREFIX to AMENT_PREFIX_PATH, exactly as test_stage_selection
 // does. Nothing here loads or initialises a stage.
@@ -35,6 +40,7 @@
 #include <vector>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
+#include "mit_controller/contact_logic_interface.hpp"
 #include "mit_controller/gait_sequencer_interface.hpp"
 #include "mit_controller/mpc_interface.hpp"
 #include "mit_controller/stage_loader.hpp"
@@ -133,6 +139,13 @@ void ExpectStockGo2Selection(const std::string& config_file) {
                                           stage_selection::kModelAdaptationTypeKey,
                                           stage_plugin_bases::kModelAdaptation,
                                           stage_selection::ModelAdaptationTypeFromLegacy(0));
+  // The contact stage has no pre-M3.1 derivation to match against: before #12 it
+  // was inline host code, so the stock plugin *is* the behaviour it reproduces.
+  ExpectSelects<ContactLogicInterface>(params,
+                                       config_file,
+                                       stage_selection::kContactLogicTypeKey,
+                                       stage_plugin_bases::kContactLogic,
+                                       stage_selection::kDefaultContactLogicPlugin);
   // The Go2 configs are only ever loaded by a Go2 build, whose WBC takes joint
   // commands (USE_WBC == true); the ULab flavour has its own configs and is
   // covered by test_stage_selection.

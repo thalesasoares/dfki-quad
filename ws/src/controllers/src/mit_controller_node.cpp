@@ -74,14 +74,39 @@ MITController::MITController(const std::string &nodeName)
   this->declare_parameter<double>("wbc_solver_tolerances", -1.0);
 
   leg_control_mode_ = static_cast<LEGControlMode>(this->get_parameter("leg_control_mode").as_int());
-  early_contact_detection_ = this->get_parameter("early_contact_detection").as_bool();
-  late_contact_detection_ = this->get_parameter("late_contact_detection").as_bool();
-  lost_contact_detection_ = this->get_parameter("lost_contact_detection").as_bool();
-  late_contact_reschedule_swing_phase_ = this->get_parameter("late_contact_reschedule_swing_phase").as_bool();
   use_model_adaptation_ = this->get_parameter("use_model_adaptation").as_bool();
-  RCLCPP_INFO_EXPRESSION(this->get_logger(), early_contact_detection_, "Early contact detection is activated");
-  RCLCPP_INFO_EXPRESSION(this->get_logger(), late_contact_detection_, "Late contact detection is activated");
-  RCLCPP_INFO_EXPRESSION(this->get_logger(), lost_contact_detection_, "Lost contact detection is activated");
+
+  // The contact stage's four detection toggles, in the ratified `contact_logic.*`
+  // spelling (contact_logic_interface.hpp). The host does not read them any more
+  // — they belong to the stage, which gets them through StageInit — it only
+  // declares them, so that they exist as ROS parameters and can be changed at
+  // runtime.
+  //
+  // Their defaults are the flat keys the host used to read into its own members,
+  // so every config written before M3.1 keeps configuring the same policy without
+  // being touched. An explicitly set nested key wins. #23 (M5.4) drops the flat
+  // spelling and with it this derivation (stage_selection.hpp).
+  this->declare_parameter<bool>(
+      contact_logic_params::kEarlyContactDetection,
+      this->get_parameter(stage_selection::kLegacyEarlyContactDetectionKey).as_bool());
+  this->declare_parameter<bool>(
+      contact_logic_params::kLateContactDetection,
+      this->get_parameter(stage_selection::kLegacyLateContactDetectionKey).as_bool());
+  this->declare_parameter<bool>(
+      contact_logic_params::kLostContactDetection,
+      this->get_parameter(stage_selection::kLegacyLostContactDetectionKey).as_bool());
+  this->declare_parameter<bool>(
+      contact_logic_params::kLateContactRescheduleSwingPhase,
+      this->get_parameter(stage_selection::kLegacyLateContactRescheduleSwingPhaseKey).as_bool());
+  RCLCPP_INFO_EXPRESSION(this->get_logger(),
+                         this->get_parameter(contact_logic_params::kEarlyContactDetection).as_bool(),
+                         "Early contact detection is activated");
+  RCLCPP_INFO_EXPRESSION(this->get_logger(),
+                         this->get_parameter(contact_logic_params::kLateContactDetection).as_bool(),
+                         "Late contact detection is activated");
+  RCLCPP_INFO_EXPRESSION(this->get_logger(),
+                         this->get_parameter(contact_logic_params::kLostContactDetection).as_bool(),
+                         "Lost contact detection is activated");
   // Load PD gains
   switch (leg_control_mode_) {
     case CARTESIAN_JOINT_CONTROL:
@@ -148,7 +173,6 @@ MITController::MITController(const std::string &nodeName)
           this->get_parameter("joint_control_gains.stance_Kd").as_double_array().data());
       break;
   }
-  feet_status_.fill(STANCE);  // Start with current stance
 
   // Prepare target
   target_.active.hybrid_x_dot = true;
@@ -303,6 +327,10 @@ MITController::MITController(const std::string &nodeName)
       stage_selection::kModelAdaptationTypeKey,
       stage_selection::ModelAdaptationTypeFromLegacy(
           this->get_parameter(stage_selection::kLegacyModelAdaptationModeKey).as_int()));
+  // The contact stage has no legacy selector to derive from: until #12 (M3.1)
+  // there was no contact stage to select, only inline host code.
+  this->declare_parameter<std::string>(stage_selection::kContactLogicTypeKey,
+                                       stage_selection::kDefaultContactLogicPlugin);
 
   on_setparam_callback_handler_ =
       this->add_on_set_parameters_callback([](const std::vector<rclcpp::Parameter> &params) {
@@ -361,6 +389,23 @@ MITController::MITController(const std::string &nodeName)
         if (param.value.string_value != loaded_gs_type_) {
           gait_update = true;
         }
+      } else if (param.name.rfind("contact_logic.", 0) == 0) {
+        // The contact stage's own keys. Routed under wbc_lock_, the lock the
+        // stage runs under (contact_logic_interface.hpp). `contact_logic.type`
+        // lands here too and is correctly refused: swapping a running stage is
+        // the gait sequencer's special case, not a general capability.
+        std::lock_guard<std::mutex> lock(wbc_lock_);
+        if (!contact_logic_->SetParameter(param.name, rclcpp::ParameterValue(param.value))) {
+          RCLCPP_WARN(this->get_logger(), "Changing parameter %s is not yet suported", param.name.c_str());
+          continue;
+        }
+      } else if (stage_selection::ContactLogicKeyFromLegacy(param.name) != nullptr) {
+        // A config still using the pre-M3.1 flat spelling. Re-set the ratified
+        // key, which re-enters this callback and takes the branch above; no echo
+        // suppression is needed, because that branch only forwards the value to
+        // the stage and does so idempotently. #23 (M5.4) removes this branch.
+        this->set_parameter(rclcpp::Parameter(stage_selection::ContactLogicKeyFromLegacy(param.name),
+                                              rclcpp::ParameterValue(param.value)));
       } else if (param.name.find("gait") != std::string::npos) {
         gait_sequencer_lock_.lock();
         bool applied = gs_->SetParameter(param.name, rclcpp::ParameterValue(param.value));
@@ -420,16 +465,8 @@ MITController::MITController(const std::string &nodeName)
         cartesian_joint_control_stance_Kp_ = Eigen::Map<const Eigen::Vector3d>(param.value.double_array_value.data());
       } else if (param.name == "cartesian_stiffness_control_gains.stance_Kd") {
         cartesian_joint_control_stance_Kd_ = Eigen::Map<const Eigen::Vector3d>(param.value.double_array_value.data());
-      } else if (param.name == "early_contact_detection") {
-        early_contact_detection_ = param.value.bool_value;
-      } else if (param.name == "late_contact_detection") {
-        late_contact_detection_ = param.value.bool_value;
-      } else if (param.name == "lost_contact_detection") {
-        lost_contact_detection_ = param.value.bool_value;
       } else if (param.name == "use_model_adaptation") {
         use_model_adaptation_ = param.value.bool_value;
-      } else if (param.name == "late_contact_reschedule_swing_phase") {
-        late_contact_reschedule_swing_phase_ = param.value.bool_value;
       } else if (param.name == "raibert.z_on_plane") {
         gait_update = true;
       } else if (param.name == "raibert.k") {
@@ -509,14 +546,19 @@ MITController::MITController(const std::string &nodeName)
   ma_ = ma_loader_.Load(stage_selection::kModelAdaptationTypeKey, MakeStageInit());
   slc_ = slc_loader_.Load(stage_selection::kSwingLegControllerTypeKey, MakeStageInit());
   wbc_ = wbc_loader_.Load(stage_selection::kWBCTypeKey, MakeStageInit());
+  // The contact stage is loaded last: it sits between the SLC and the WBC in the
+  // control loop, and unlike the other five it replaces host code rather than a
+  // host factory, so it has no construction order to preserve.
+  contact_logic_ = contact_logic_loader_.Load(stage_selection::kContactLogicTypeKey, MakeStageInit());
   RCLCPP_INFO(this->get_logger(),
               "Pipeline stages loaded: gait sequencer [%s], mpc [%s], swing leg controller [%s], wbc [%s], "
-              "model adaptation [%s]",
+              "model adaptation [%s], contact logic [%s]",
               this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string().c_str(),
               this->get_parameter(stage_selection::kMPCTypeKey).as_string().c_str(),
               this->get_parameter(stage_selection::kSwingLegControllerTypeKey).as_string().c_str(),
               this->get_parameter(stage_selection::kWBCTypeKey).as_string().c_str(),
-              this->get_parameter(stage_selection::kModelAdaptationTypeKey).as_string().c_str());
+              this->get_parameter(stage_selection::kModelAdaptationTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kContactLogicTypeKey).as_string().c_str());
 
   // Now change modus of le driver acording to this controller
   // comment next paragraph if you want to use controller on bag data
@@ -797,8 +839,11 @@ void MITController::ModelAdaptationCallback() {
       RCLCPP_INFO(this->get_logger(), "Updated used Model in MPC and GS");
       wbc_lock_.lock();
       wbc_->UpdateModel(quad_model_);
+      // The contact stage computes its hold positions from the model too, and
+      // runs under this same lock.
+      contact_logic_->UpdateModel(quad_model_);
       wbc_lock_.unlock();
-      RCLCPP_INFO(this->get_logger(), "Updated used Model in WBC");
+      RCLCPP_INFO(this->get_logger(), "Updated used Model in WBC and contact logic");
       slc_lock_.lock();
       slc_->UpdateModel(quad_model_);
       slc_lock_.unlock();
@@ -858,130 +903,56 @@ void MITController::ControlLoopCallback() {
                      mpc_prediction_temp.linear_velocity[1],
                      mpc_prediction_temp.angular_velocity[1]);  // TODO: take MPC first prediction here?
 
+  // Contact reconciliation (issue #12, M3.1). The per-leg early/late/lost contact
+  // FSM that used to be two switch statements right here is the sixth pipeline
+  // stage now; the host feeds it, calls it once, and reacts to what it reports.
+  contact_logic_->UpdateState(quad_state_temp);
+  contact_logic_->UpdateGaitSequence(gait_sequence_temp);
+  contact_logic_->UpdateWrenchSequence(wrench_sequence_temp);
+  contact_logic_->UpdateSwingLegState(feet_targets_temp, feet_swing_progress_temp, feet_swing_states_temp);
+
   // Prepare for WBC
   auto wrenches = wrench_sequence_temp.forces[0];
   auto feet_targets = feet_targets_temp;
   auto gait = gait_sequence_temp.contact_sequence[0];
 
-  // Update leg status
-  for (unsigned int leg_idx = 0; leg_idx < N_LEGS; leg_idx++) {
-    switch (feet_status_[leg_idx]) {
-      case LOST_CONTACT:
-        [[fallthrough]];
-      case LATE_CONTACT:
-        // Leave it in slipped and override anything until it gets contact again
-        // or do the late contact movement until it gets contact again and ignore any planned stance
-        if (quad_state_temp.GetFeetContacts()[leg_idx] and gait[leg_idx]) {
-          // Regaining contact and schedule stance phase
-          feet_status_[leg_idx] = STANCE;
-        } else if (quad_state_temp.GetFeetContacts()[leg_idx] and !gait[leg_idx]) {
-          // Regaining contact and scheduled flight phase
-          feet_status_[leg_idx] = SWING;
-        } else if (late_contact_reschedule_swing_phase_ and !gait[leg_idx])
-        // Special feature to reschedule swing phase even if late contact (sometimes
-        // legs are not properly touching the ground)
-        {
-          feet_status_[leg_idx] = SWING;
-        }
-        // Otherwise stay in that phase
-        break;
-      case EARLY_CONTACT:
-        // Wait for scheduling to react to early contact
-        if (gait[leg_idx]) {
-          feet_status_[leg_idx] = STANCE;
-        }
-        break;
-      case SWING:
-        // Check for early or late contact:
-        if (early_contact_detection_ and !gait[leg_idx] and quad_state_temp.GetFeetContacts()[leg_idx]
-            and feet_swing_progress_temp[leg_idx] > 0.5) {  // Early contact
-          feet_status_[leg_idx] = EARLY_CONTACT;
-          early_contact_hold_position_[leg_idx] = quad_model_.CalcFootPositionInWorld(leg_idx, quad_state_temp);
-          RCLCPP_INFO(this->get_logger(), "Foot [%d] has early contact", leg_idx);
-          if (PUBLISH_HEARTBEAT) {
-            controller_heartbeat_.num_early_contacts++;
-          }
-        } else if (late_contact_detection_ and gait[leg_idx] and !quad_state_temp.GetFeetContacts()[leg_idx]) {
-          feet_status_[leg_idx] = LATE_CONTACT;
-          slip_hold_in_body_[leg_idx] = quad_model_.CalcFootPositionInBodyFrame(
-              leg_idx, Eigen::Map<const Eigen::Vector3d>(quad_state_temp.GetJointPositions()[leg_idx].data()));
-          RCLCPP_INFO(this->get_logger(), "Foot [%d] has late contact", leg_idx);
-        } else if (gait[leg_idx]) {
-          feet_status_[leg_idx] = STANCE;  // rare case but this is the ideal one
-        }
-        break;
-      case STANCE:
-        // Check if flight phase scheduled or slip detected
-        if (!gait[leg_idx]) {
-          feet_status_[leg_idx] = SWING;  // Swing scheduled so going to swing phase
-        } else if (lost_contact_detection_ and gait[leg_idx] and !quad_state_temp.GetFeetContacts()[leg_idx]) {
-          feet_status_[leg_idx] = LOST_CONTACT;  // Slip detected going to slip
-          slip_hold_in_body_[leg_idx] = quad_model_.CalcFootPositionInBodyFrame(
-              leg_idx, Eigen::Map<const Eigen::Vector3d>(quad_state_temp.GetJointPositions()[leg_idx].data()));
-          RCLCPP_WARN(this->get_logger(),
-                      "Foot [%d] lost contact and is kept a last contact position relative to body",
-                      leg_idx);
-        }
-        break;
-    }
-  }
+  // Reconcile the plan with what the feet actually sense. In/out: the three
+  // objects seeded above are the stage's inputs and, on return, the WBC's.
+  // Exactly once per cycle — this is the only stage method that mutates state.
+  contact_logic_->Reconcile(gait, wrenches, feet_targets);
 
-  //  RCLCPP_WARN_THROTTLE(
-  //      this->get_logger(), this->get_clock(), 1.0, "Leg [%d] slipped, keeping position until it gets contact");
-  // Apply leg commands
+  // The logging and the heartbeat counter stayed here: they are host concerns,
+  // and keeping them out of the stage is what lets it be a plain algorithm with
+  // no logger and no message dependency. The messages and their severities are
+  // the ones the inline code emitted, on the same cycles.
+  static ContactLogicInterface::ContactEvents contact_events;
+  contact_logic_->GetContactEvents(contact_events);
   for (unsigned int leg_idx = 0; leg_idx < N_LEGS; leg_idx++) {
-    switch (feet_status_[leg_idx]) {
-      case STANCE: {
-        last_feet_pos_targets_[leg_idx] = gait_sequence_temp.foot_position_sequence[0][leg_idx];
-        feet_targets.positions[leg_idx] = gait_sequence_temp.foot_position_sequence[0][leg_idx];
-        feet_targets.velocities[leg_idx].setZero();
-        feet_targets.accelerations[leg_idx].setZero();
-      } break;
-      case SWING: {
-        wrenches[leg_idx].setZero();
-        // feet targets stay the same
-        if ((feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::STANCE)
-            or (feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED)) {
-          // take last feet targets for now
-          feet_targets.velocities[leg_idx].setZero();
-          feet_targets.accelerations[leg_idx].setZero();
-          feet_targets.positions[leg_idx] = last_feet_pos_targets_[leg_idx];
-          RCLCPP_ERROR_EXPRESSION(this->get_logger(),
-                                  feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED,
-                                  "Controll loop reached Swing phase for foot [%d], but SLC is still in stance",
-                                  leg_idx);
-          RCLCPP_WARN_EXPRESSION(this->get_logger(),
-                                 feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED,
-                                 "Controll loop reached Swing phase for foot [%d], but SLC has not yet started",
-                                 leg_idx);
-        }
-      } break;
-      case EARLY_CONTACT: {
-        gait[leg_idx] = true;
-        feet_targets.velocities[leg_idx].setZero();
-        feet_targets.accelerations[leg_idx].setZero();
-        feet_targets.positions[leg_idx] = early_contact_hold_position_[leg_idx];
-        // Next stance phase targets have to be transformed to current pose
-        int next_stance_indx = int(gait_sequence_temp.swing_time_sequence[0][leg_idx] / MPC_DT) + 1;
-        assert(gait_sequence_temp.contact_sequence[next_stance_indx][leg_idx] == true);
-        wrenches[leg_idx] = quad_state_temp.GetOrientationInWorld()
-                            * gait_sequence_temp.reference_trajectory_orientation[next_stance_indx].inverse()
-                            * wrench_sequence_temp.forces[next_stance_indx][leg_idx];
-      } break;
-      case LOST_CONTACT: {
-        // Keep foot on lost position
-        // same behaviour as LATE_CONTACT for now
-        [[fallthrough]];
+    if (contact_events.early_contact_detected[leg_idx]) {
+      RCLCPP_INFO(this->get_logger(), "Foot [%d] has early contact", leg_idx);
+      if (PUBLISH_HEARTBEAT) {
+        controller_heartbeat_.num_early_contacts++;
       }
-      case LATE_CONTACT: {
-        gait[leg_idx] = false;
-        feet_targets.velocities[leg_idx].setZero();
-        feet_targets.accelerations[leg_idx].setZero();
-        feet_targets.positions[leg_idx] = Eigen::Translation3d(quad_state_.GetPositionInWorld())
-                                          * quad_state_.GetOrientationInWorld()
-                                          * slip_hold_in_body_[leg_idx];  // Transformed to world
-        wrenches[leg_idx].setZero();
-      } break;
+    }
+    if (contact_events.late_contact_detected[leg_idx]) {
+      RCLCPP_INFO(this->get_logger(), "Foot [%d] has late contact", leg_idx);
+    }
+    if (contact_events.lost_contact_detected[leg_idx]) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Foot [%d] lost contact and is kept a last contact position relative to body",
+                  leg_idx);
+    }
+    // The event covers both SLC states that mean "not swinging yet"; these two
+    // messages only ever fired for NOT_STARTED, so the host still gates on it.
+    if (contact_events.swing_scheduled_before_slc_started[leg_idx]) {
+      RCLCPP_ERROR_EXPRESSION(this->get_logger(),
+                              feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED,
+                              "Controll loop reached Swing phase for foot [%d], but SLC is still in stance",
+                              leg_idx);
+      RCLCPP_WARN_EXPRESSION(this->get_logger(),
+                             feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED,
+                             "Controll loop reached Swing phase for foot [%d], but SLC has not yet started",
+                             leg_idx);
     }
   }
 

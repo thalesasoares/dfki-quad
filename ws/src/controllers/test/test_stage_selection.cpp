@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "mit_controller/contact_logic_interface.hpp"
 #include "mit_controller/gait_sequencer_interface.hpp"
 #include "mit_controller/mpc_interface.hpp"
 #include "mit_controller/stage_loader.hpp"
@@ -80,6 +81,33 @@ TEST(StageSelection, WBCFollowsTheBuildFlavour) {
   EXPECT_STREQ(stage_selection::WBCTypeForBuild(false), "inverse_dynamics");
 }
 
+// The contact stage's bridge maps *keys*, not values (issue #12, M3.1): the four
+// pre-M3.1 flat toggles onto the ratified contact_logic.* spelling. Getting a
+// mapping wrong would silently drop a toggle — the host would re-set a key the
+// stage does not recognise — so both directions are pinned.
+TEST(StageSelection, ContactLogicBridgesEveryLegacyToggle) {
+  EXPECT_STREQ(stage_selection::ContactLogicKeyFromLegacy(stage_selection::kLegacyEarlyContactDetectionKey),
+               contact_logic_params::kEarlyContactDetection);
+  EXPECT_STREQ(stage_selection::ContactLogicKeyFromLegacy(stage_selection::kLegacyLateContactDetectionKey),
+               contact_logic_params::kLateContactDetection);
+  EXPECT_STREQ(stage_selection::ContactLogicKeyFromLegacy(stage_selection::kLegacyLostContactDetectionKey),
+               contact_logic_params::kLostContactDetection);
+  EXPECT_STREQ(
+      stage_selection::ContactLogicKeyFromLegacy(stage_selection::kLegacyLateContactRescheduleSwingPhaseKey),
+      contact_logic_params::kLateContactRescheduleSwingPhase);
+}
+
+// Everything else must fall through, or the host would route unrelated
+// parameters into the contact stage. In particular the *nested* keys must not
+// bridge onto themselves: that branch runs before the routing branch would, and
+// would turn every contact parameter change into an infinite re-set.
+TEST(StageSelection, ContactLogicBridgeIgnoresEverythingElse) {
+  EXPECT_EQ(stage_selection::ContactLogicKeyFromLegacy(contact_logic_params::kEarlyContactDetection), nullptr);
+  EXPECT_EQ(stage_selection::ContactLogicKeyFromLegacy(stage_selection::kContactLogicTypeKey), nullptr);
+  EXPECT_EQ(stage_selection::ContactLogicKeyFromLegacy("use_model_adaptation"), nullptr);
+  EXPECT_EQ(stage_selection::ContactLogicKeyFromLegacy(""), nullptr);
+}
+
 // --- 2. The defaults name declared plugins -----------------------------------
 
 TEST(StageSelection, EveryHostDefaultIsADeclaredPlugin) {
@@ -100,4 +128,6 @@ TEST(StageSelection, EveryHostDefaultIsADeclaredPlugin) {
                                                                     stage_selection::WBCTypeForBuild(true));
   ExpectDeclared<WBCInterface<CartesianCommands>>(stage_plugin_bases::kWBCCartesian,
                                                   stage_selection::WBCTypeForBuild(false));
+  ExpectDeclared<ContactLogicInterface>(stage_plugin_bases::kContactLogic,
+                                        stage_selection::kDefaultContactLogicPlugin);
 }

@@ -73,9 +73,9 @@ include_directories(include include/mit_controller src)
 # One plugin description file per stage base class. They install the XML and
 # register the `controllers__pluginlib__plugin` ament-index resource that
 # pluginlib::ClassLoader reads for discovery. M2.3 (#8) filled in the stock
-# wrapper <class> entries (built by the stock stage plugin section below);
-# contact_logic_plugins.xml stays empty until M3.1 (#12) adds the contact class,
-# and #13 reworks only wbc_plugins.xml. See doc/modularity/plugin_discovery.md.
+# wrapper <class> entries (built by the stock stage plugin section below) and
+# M3.1 (#12) added the contact class to contact_logic_plugins.xml; #13 reworks
+# only wbc_plugins.xml. See doc/modularity/plugin_discovery.md.
 pluginlib_export_plugin_description_file(controllers plugins/gait_sequencer_plugins.xml)
 pluginlib_export_plugin_description_file(controllers plugins/mpc_plugins.xml)
 pluginlib_export_plugin_description_file(controllers plugins/slc_plugins.xml)
@@ -118,6 +118,24 @@ if (BUILD_TESTING)
             include include/mit_controller test)
     ament_target_dependencies(test_stage_contracts common interfaces rclcpp Eigen3)
     target_compile_options(test_stage_contracts PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+    # ##########################################################################
+    # --- Stock contact logic test (issue #12, M3.1) --- #
+    # ##########################################################################
+    # The behavioural pin for the FSM extracted out of the control loop: every
+    # branch of both switch statements, driven through ContactLogicInterface in
+    # the host's call order. It links the algorithm source directly rather than
+    # going through pluginlib — the plugin *packaging* is covered by
+    # test_stock_plugins / test_plugin_discovery, this covers the policy.
+    # potato_model.cpp supplies the model/state doubles.
+    ament_add_gtest(test_default_contact_logic
+            test/test_default_contact_logic.cpp
+            src/mit_controller/default_contact_logic.cpp
+            src/potato_sim/potato_model.cpp)
+    target_include_directories(test_default_contact_logic PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_default_contact_logic common interfaces rclcpp Eigen3)
+    target_compile_options(test_default_contact_logic PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
     # ##########################################################################
     # --- Plugin discovery smoke test (issue #6, M2.1) --- #
@@ -226,7 +244,8 @@ if (BUILD_TESTING)
             pluginlib common interfaces rclcpp Eigen3)
     target_compile_options(test_stock_plugins PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_dependencies(test_stock_plugins
-            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins)
+            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins
+            contact_logic_plugins)
 
     # ##########################################################################
     # --- Stage selection test (issue #9, M2.4) --- #
@@ -246,7 +265,8 @@ if (BUILD_TESTING)
             pluginlib common interfaces rclcpp Eigen3)
     target_compile_options(test_stage_selection PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_dependencies(test_stage_selection
-            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins)
+            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins
+            contact_logic_plugins)
 
     # ##########################################################################
     # --- Go2 YAML stage selection test (issue #10, M2.5) --- #
@@ -267,7 +287,8 @@ if (BUILD_TESTING)
             pluginlib ament_index_cpp common interfaces rclcpp Eigen3)
     target_compile_options(test_go2_yaml_stage_selection PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_dependencies(test_go2_yaml_stage_selection
-            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins)
+            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins
+            contact_logic_plugins)
 endif ()
 
 
@@ -392,7 +413,8 @@ add_dependencies(mitcontrollernode
         mpc_plugins
         slc_plugins
         wbc_plugins
-        model_adaptation_plugins)
+        model_adaptation_plugins
+        contact_logic_plugins)
 
 if (ROBOT_NAME STREQUAL "ulab")
     target_compile_definitions(mitcontrollernode PUBLIC ROBOT_MODEL=ULAB)
@@ -532,6 +554,16 @@ target_include_directories(model_adaptation_plugins PRIVATE ${stock_plugin_commo
 ament_target_dependencies(model_adaptation_plugins pluginlib rclcpp Eigen3 interfaces)
 target_compile_options(model_adaptation_plugins PRIVATE ${stock_plugin_compile_options})
 
+# The contact stage (issue #12, M3.1). Same shape as slc_plugins — no solver, no
+# optimiser, only Eigen and the abstract model/state — because the FSM it wraps is
+# the code that used to run inline in the host's control loop.
+add_library(contact_logic_plugins SHARED
+        src/plugins/contact_logic_plugins.cpp
+        src/mit_controller/default_contact_logic.cpp)
+target_include_directories(contact_logic_plugins PRIVATE ${stock_plugin_common_includes})
+ament_target_dependencies(contact_logic_plugins pluginlib rclcpp Eigen3 interfaces)
+target_compile_options(contact_logic_plugins PRIVATE ${stock_plugin_compile_options})
+
 # pluginlib resolves a plugin library relative to the install prefix of the
 # package that owns the description XML (this package), so the .so must land in
 # the same lib/ the exported XML points at.
@@ -541,6 +573,7 @@ install(TARGETS
         slc_plugins
         wbc_plugins
         model_adaptation_plugins
+        contact_logic_plugins
         DESTINATION lib)
 
 

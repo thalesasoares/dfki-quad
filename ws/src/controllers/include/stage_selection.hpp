@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "mit_controller/contact_logic_interface.hpp"
+
 /**
  * Which stage implementation the host loads, and how that is spelled in the
  * parameters (issue #9, M2.4).
@@ -27,6 +29,7 @@
  * | `slc.type` | — (one stock SLC) |
  * | `wbc.type` | `USE_WBC`, i.e. the `ROBOT_MODEL` build flavour |
  * | `model_adaptation.type` | `ma_mode` (0 = Kalman filter, 1 = recursive least squares) |
+ * | `contact_logic.type` | — (the FSM was inline host code until #12) |
  *
  * An explicitly set `*.type` always wins — the derivation only supplies the
  * *default* of the declared parameter. M2.5 wrote the keys into
@@ -55,10 +58,24 @@ inline constexpr char kMPCTypeKey[] = "mpc.type";
 inline constexpr char kSwingLegControllerTypeKey[] = "slc.type";
 inline constexpr char kWBCTypeKey[] = "wbc.type";
 inline constexpr char kModelAdaptationTypeKey[] = "model_adaptation.type";
+inline constexpr char kContactLogicTypeKey[] = "contact_logic.type";
 
 /** The legacy parameters the defaults above are derived from. */
 inline constexpr char kLegacyGaitSequencerKey[] = "gait_sequencer";
 inline constexpr char kLegacyModelAdaptationModeKey[] = "ma_mode";
+
+/**
+ * The pre-M3.1 flat spelling of the contact stage's four detection toggles.
+ *
+ * These are not *selection* keys — they configure the stage rather than choose
+ * it — but they are legacy keys bridged onto a ratified spelling, which is the
+ * one thing this header exists to keep in one place. #23 (M5.4) deletes them
+ * together with the two selectors above.
+ */
+inline constexpr char kLegacyEarlyContactDetectionKey[] = "early_contact_detection";
+inline constexpr char kLegacyLateContactDetectionKey[] = "late_contact_detection";
+inline constexpr char kLegacyLostContactDetectionKey[] = "lost_contact_detection";
+inline constexpr char kLegacyLateContactRescheduleSwingPhaseKey[] = "late_contact_reschedule_swing_phase";
 
 /** Stock plugin class names, as declared in the `plugins/` XMLs (M2.3, issue #8). */
 inline constexpr char kSimpleGaitPlugin[] = "simple_gait";
@@ -69,6 +86,7 @@ inline constexpr char kWbcArcOptPlugin[] = "wbc_arc_opt";
 inline constexpr char kInverseDynamicsPlugin[] = "inverse_dynamics";
 inline constexpr char kKfAdaptationPlugin[] = "kf_adaptation";
 inline constexpr char kRlsAdaptationPlugin[] = "rls_adaptation";
+inline constexpr char kDefaultContactLogicPlugin[] = "default_contact_logic";
 
 /**
  * `gait_sequencer` → gait sequencer plugin class.
@@ -95,6 +113,32 @@ inline std::string GaitSequencerTypeFromLegacy(const std::string& gait_sequencer
  */
 inline std::string ModelAdaptationTypeFromLegacy(int64_t ma_mode) {
   return ma_mode == 1 ? kRlsAdaptationPlugin : kKfAdaptationPlugin;
+}
+
+/**
+ * Flat contact toggle → the ratified `contact_logic.*` key it is bridged onto,
+ * or `nullptr` when `name` is not one of the four.
+ *
+ * Unlike the two mappings above this one bridges *keys*, not values: the host
+ * declares each `contact_logic.*` toggle with the flat key's value as its
+ * default, and re-routes a runtime change of a flat key onto its nested twin.
+ * Both directions go through this function, so #23 (M5.4) removes the bridge by
+ * deleting one function and its callers.
+ */
+inline const char* ContactLogicKeyFromLegacy(const std::string& name) {
+  if (name == kLegacyEarlyContactDetectionKey) {
+    return contact_logic_params::kEarlyContactDetection;
+  }
+  if (name == kLegacyLateContactDetectionKey) {
+    return contact_logic_params::kLateContactDetection;
+  }
+  if (name == kLegacyLostContactDetectionKey) {
+    return contact_logic_params::kLostContactDetection;
+  }
+  if (name == kLegacyLateContactRescheduleSwingPhaseKey) {
+    return contact_logic_params::kLateContactRescheduleSwingPhase;
+  }
+  return nullptr;
 }
 
 /**

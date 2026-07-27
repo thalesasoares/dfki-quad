@@ -1,6 +1,6 @@
 # Stock Stage Plugins
 
-**Status:** implemented in M2.3 (issue #8). ·
+**Status:** implemented in M2.3 (issue #8); `default_contact_logic` added in M3.1 (issue #12). ·
 **Applies to:** `ws/src/controllers` ·
 **Companion documents:** [`plugin_lifecycle.md`](plugin_lifecycle.md) — the wrapper contract (§4) ·
 [`plugin_discovery.md`](plugin_discovery.md) — the description XML schema ·
@@ -27,6 +27,13 @@ behaviour change** (issue #8 acceptance criterion 3). Each plugin is a thin adap
 | `inverse_dynamics` | `InverseDynamicsPlugin` | `InverseDynamics` | `libwbc_plugins` | `kWBCCartesian` |
 | `kf_adaptation` | `KfAdaptationPlugin` | `KFModelAdaptation` | `libmodel_adaptation_plugins` | `kModelAdaptation` |
 | `rls_adaptation` | `RlsAdaptationPlugin` | `LeastSquaresModelAdaptation` | `libmodel_adaptation_plugins` | `kModelAdaptation` |
+| `default_contact_logic` | `DefaultContactLogicPlugin` | `DefaultContactLogic` | `libcontact_logic_plugins` | `kContactLogic` |
+
+`default_contact_logic` joined the table in M3.1 (#12) and is the one entry that wraps code written
+*for* the plugin boundary rather than code that predates it: `DefaultContactLogic` is the contact
+reconciliation FSM lifted out of `MITController::ControlLoopCallback`, so its `Init` has no host
+factory to mirror — see §2 — and its "no behaviour change" claim rests on
+`test/test_default_contact_logic.cpp` rather than on the wrapper being a pure forwarder.
 
 `bio_gait` (`BioInspiredGait`) is deliberately **not** exported here — issue #8 defers it to M4.1
 (#16). The `name=` values are the suggested stock ids; the selection-key vocabulary belongs to M2.5
@@ -50,6 +57,13 @@ branch the host used to pick with a parameter is now the plugin selection:
 | `bezier_swing` | the `make_unique<SwingLegController>` block | — |
 | `wbc_arc_opt` / `inverse_dynamics` | the `create_wbc` lambda's two branches | `USE_WBC` (compile-time) |
 | `kf_adaptation` / `rls_adaptation` | the `ma_mode` `switch`, default / case 1 | `ma_mode` |
+| `default_contact_logic` | — see below | — |
+
+`default_contact_logic` is the exception to the paragraph above, because M3.1 (#12) is an extraction,
+not a repackaging: there was no host *factory* to relocate, only host *code*. The two switch
+statements of `ControlLoopCallback` became `DefaultContactLogic::Reconcile`, and the four detection
+toggles the host read into its own members became the stage's `Init` parameters. Its `Init` is
+therefore four `Require<bool>` calls and nothing else.
 
 ## 3. Parameters per stage
 
@@ -77,6 +91,27 @@ reference).
 | `simple_gait_sequencer.manual_gait.duty_factor` | optional | `{0.6,0.6,0.6,0.6}` | `simple_gait`, `Manual` only |
 | `simple_gait_sequencer.manual_gait.phase_offset` | optional | `{0.0,0.5,0.5,0.0}` | `simple_gait`, `Manual` only |
 | `adaptive_gait_sequencer.gait.*` | optional | see `mit_controller_node.cpp` | `adaptive_gait` only; `phase_offset` default `{0.0,0.5,0.5,0.0}`, `gait_change_froude` `{0.02,0.006}`, plus the scalar `swing_time`/`filter_size`/… defaults |
+
+### `default_contact_logic`
+
+| Key | Req? | Default | Notes |
+|---|---|---|---|
+| `contact_logic.early_contact_detection` | required | — | bool; accept a sensed contact past half a scheduled swing |
+| `contact_logic.late_contact_detection` | required | — | bool; react to a scheduled stance that has not touched down |
+| `contact_logic.lost_contact_detection` | required | — | bool; react to a stance contact disappearing (slip) |
+| `contact_logic.late_contact_reschedule_swing_phase` | required | — | bool; let a late-contact leg follow the plan back into swing without regaining contact |
+
+All four are required rather than optional-with-a-default: the host declares every one of them, so an
+absent key means an unconfigured caller, not a value worth guessing. They are also the stage's
+`SetParameter` keys — one vocabulary for start-up and runtime
+([`plugin_lifecycle.md`](plugin_lifecycle.md) §3) — and are named as constants in
+`contact_logic_params` (`mit_controller/contact_logic_interface.hpp`) so the host and the stage cannot
+drift apart on the spelling.
+
+The host declares each with the pre-M3.1 **flat** key (`early_contact_detection`, …) as its default,
+so configs written before M3.1 keep configuring the same policy untouched, and re-routes a runtime
+change of a flat key onto its nested twin. That bridge is host-only
+(`stage_selection::ContactLogicKeyFromLegacy`) and goes away with #23 (M5.4).
 
 ### `acados_mpc`
 
@@ -177,8 +212,13 @@ URDF), which belongs to the M2.6 (#11) sim regression, not a fast unit test; the
 and constructing is still the runtime proof that the link story resolves, and their wrapper-specific
 logic (the MPC solver-name mapping) is covered by the fail-fast tests. The suite also pins the
 fail-fast errors (missing required key, unknown gait/solver name, unknown selection).
+`default_contact_logic` is light too: it needs no solver and no URDF, so the suite `Init`s it and runs
+a full `Reconcile` cycle through the frozen interface, and pins its missing-required-key error. Its
+*behaviour* is covered separately and far more thoroughly by `test/test_default_contact_logic.cpp`
+(19 cases over every branch of the FSM), because unlike the M2.3 wrappers it is not forwarding to
+code that already ran in production behind the same interface.
 `test/test_plugin_discovery.cpp` and
 `test/test_stage_loader.cpp` assert each stage base now declares exactly these stock ids (the flip
-from M2.1/M2.2's "empty"). Behavioural equivalence to the pre-plugin path is guaranteed by
+from M2.1/M2.2's "empty" — including the contact base, which stayed empty until M3.1). Behavioural equivalence to the pre-plugin path is guaranteed by
 construction — the wrappers only forward and the algorithm code is untouched — and is confirmed
 end-to-end by the M2.6 (#11) Go2 sim regression.

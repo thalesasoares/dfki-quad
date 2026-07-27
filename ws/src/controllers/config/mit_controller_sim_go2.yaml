@@ -17,6 +17,8 @@ mit_controller_node: ##### SIMULATION
       type: bezier_swing # swing leg controller: bezier_swing
     model_adaptation:
       type: kf_adaptation # model adaptation: kf_adaptation (Kalman filter) | rls_adaptation (recursive least squares)
+    contact_logic:
+      type: default_contact_logic # contact reconciliation: default_contact_logic
     initial_height: 0.30
     leg_control_mode: 0 # 0: wbc; 3: ikin
     joint_control_gains: # wbc

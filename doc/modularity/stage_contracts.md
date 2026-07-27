@@ -43,9 +43,10 @@ Rules going forward:
 | Model adaptation | `model_adaptation/model_adaptation_interface.hpp` | `KFModelAdaptation`, `LeastSquaresModelAdaptation` |
 
 A **sixth stage** — contact reconciliation — has its contract specified in §4.6
-(`mit_controller/contact_logic_interface.hpp`, issue #4) but is not in this table because it has no
-concrete implementation and no host wiring yet; its logic still runs inline in the control loop.
-Issue #12 (M3.1) adds the `DefaultContactLogic` implementation and moves it behind the interface.
+(`mit_controller/contact_logic_interface.hpp`, issue #4). It was kept out of this table while it had
+no implementation and no host wiring. Issue #12 (M3.1) added `DefaultContactLogic`, moved the host's
+inline FSM behind the interface and wired the host to it, so the sixth row is now
+`ContactLogicInterface` / `DefaultContactLogic`; the table is left as the M1 record.
 
 ```mermaid
 flowchart LR
@@ -68,7 +69,7 @@ Solid arrows are per-cycle data flow. The dashed arrow is the model-update broad
 event-driven rather than periodic (§4.5). The **thick arrow** out of `ContactLogic` marks the sixth
 stage, which is *specified* (§4.6) but **not yet wired**: today its logic runs inline in
 `ControlLoopCallback` between the SLC/MPC outputs and the WBC. Extracting it behind
-`ContactLogicInterface` is issue #12 (M3.1).
+`ContactLogicInterface` was issue #12 (M3.1), now done.
 
 ## 3. Timing and threading
 
@@ -299,10 +300,12 @@ mutates** — see G6. The `Get*` accessors are `const` and must be side-effect f
 
 Header: `ws/src/controllers/include/mit_controller/contact_logic_interface.hpp`
 
-> **Status: specified in M1.4 (issue #4); no host wiring until M3.1 (issue #12).** This section is
-> the behavioural contract the extraction must reproduce. Today the logic runs inline in
-> `ControlLoopCallback` (`mit_controller_node.cpp:989-1109`) and the FSM states are the private enum
-> `MITController::LegStatus` (`mit_controller_node.hpp:50`). Nothing constructs the interface yet.
+> **Status: specified in M1.4 (issue #4); implemented and wired in M3.1 (issue #12).** This section is
+> the behavioural contract the extraction had to reproduce, written while the logic still ran inline
+> in `ControlLoopCallback`. It is now implemented by `DefaultContactLogic`
+> (`src/mit_controller/default_contact_logic.cpp`), packaged as the `default_contact_logic` stock
+> plugin and loaded by the host through `contact_logic.type`. `test/test_default_contact_logic.cpp`
+> checks the FSM table below branch by branch.
 
 The stage reconciles the **planned** contact schedule from the gait sequencer against the **sensed**
 foot contacts from the state: it runs a per-leg FSM and overrides the WBC inputs — contact flags,
@@ -362,14 +365,17 @@ orientation; `LATE_CONTACT`/`LOST_CONTACT` force the contact flag false, hold th
 transformed back to world, and zero the wrench.
 
 **Threading.** The host runs this stage inside the control loop under `wbc_lock_`, single-threaded
-with respect to the WBC. `UpdateModel` arrives from the model-adaptation broadcast (§4.5); until the
-lock discipline of G6 is regularised the extraction (issue #12) must not assume `UpdateModel` and
-`Reconcile` are mutually excluded — see G11.
+with respect to the WBC. `UpdateModel` arrives from the model-adaptation broadcast (§4.5), and M3.1
+issues it under that same `wbc_lock_`, next to `wbc_->UpdateModel` — so `UpdateModel` and `Reconcile`
+*are* mutually excluded for this stage, and `DefaultContactLogic` takes no lock of its own. This is
+narrower than G6, which is about the gait sequencer and the model object itself and stays open.
 
-**Runtime tuning.** `SetParameter` handles the four `contact_logic.*` detection toggles
-(`early_contact_detection`, `late_contact_detection`, `lost_contact_detection`,
-`late_contact_reschedule_swing_phase`), which are host member flags today
-(`mit_controller_node.hpp:66-69`). Wired in M3.1.
+**Runtime tuning.** `SetParameter` handles the four `contact_logic.*` detection toggles, which were
+host member flags before M3.1. They are named as constants in `contact_logic_params`
+(`contact_logic_interface.hpp`) and routed by the host under `wbc_lock_`. The host also accepts the
+pre-M3.1 flat spelling and re-sets it onto the nested key
+(`stage_selection::ContactLogicKeyFromLegacy`), so configs and scripts written before M3.1 keep
+working; #23 (M5.4) removes that bridge.
 
 ## 5. Gaps between the contracts and the current host
 
@@ -388,7 +394,7 @@ where the contract is incomplete. Each has an owning follow-up issue.
 | G8 | `WBCInterface` is a template | `WBCType` is a `std::conditional<USE_WBC, …>` typedef (`mit_controller_node.hpp:112-114`); `reinterpret_cast` was at `:604, 623, 1257, 1269` | A class template cannot be a pluginlib base class; the command type must become a runtime choice. **Partially addressed in M1.2:** all four `reinterpret_cast`s removed (construction and `GetJointCommand` dispatch now use `if constexpr` in templated contexts; a mismatched `leg_control_mode_` is a logged error instead of UB). De-templating the interface itself remains **#13** | #13 |
 | G9 | `AdaptiveGaitSequencer` config escape hatch | was `dynamic_cast` + `ad_gs->Gait()` at `:316-317`, reaching ~15 `AdaptiveGait` setters | The one *guarded* cast, so not unsafe — but still concrete-type coupling. **Fixed in M1.2:** the ~15 setters moved into `AdaptiveGaitSequencer::SetParameter`; the host no longer `dynamic_cast`s | #2 — **fixed** |
 | G10 | Unsynchronised diagnostic reads | `gs_->GetGaitState()` at `:959` runs after `gait_sequencer_lock_` is released at `:881`; `slc_->GetCurrentTrajs()` at `:1301` runs after `wbc_lock_` is released and never takes `slc_lock_` | Data race against `UpdateModel` / `SLCLoopCallback`. Low severity (diagnostics only) but it means `Get*` methods cannot be documented as "called under the stage lock". **Still open after M2.4**, for the same reason as G6 — [`pipeline_host.md`](pipeline_host.md) §8 | #9 — deferred |
-| G11 | Contact FSM reads unlocked member state | the `LATE_CONTACT`/`LOST_CONTACT` output branch at `:1103-1105` reads the member `quad_state_` directly (`GetPositionInWorld`/`GetOrientationInWorld`) instead of the `quad_state_temp` copy taken under `quad_state_lock_` at `:964-966` that the rest of the callback uses | Data race against the state subscription writing `quad_state_`. Pre-existing; the extraction (§4.6) must pass the locked state copy into the stage so `ContactLogicInterface` reads only its `UpdateState` argument | #12 |
+| G11 | ~~Contact FSM reads unlocked member state~~ | the `LATE_CONTACT`/`LOST_CONTACT` output branch read the member `quad_state_` directly (`GetPositionInWorld`/`GetOrientationInWorld`) instead of the `quad_state_temp` copy taken under `quad_state_lock_` that the rest of the callback used | Was a data race against the state subscription writing `quad_state_`. **Closed by M3.1 (#12):** the stage reads only what `UpdateState` gave it, which is the locked copy | #12 ✔ |
 
 **Cast inventory:** `grep -c reinterpret_cast ws/src/controllers/src/mit_controller_node.cpp` → **0**
 as of M1.2 (was 18, covering G1×7, G2×3, G3×4, G8×4). `dynamic_cast` for stage access is likewise 0

@@ -1,17 +1,28 @@
 <!--
-  Contact-logic stage plugins (issue #6, M2.1).
+  Contact-logic stage plugins (issue #6, M2.1; class added by issue #12, M3.1).
 
   base_class_type: StagePlugin<ContactLogicInterface>
     (mit_controller/stage_plugin.hpp + mit_controller/contact_logic_interface.hpp)
 
-  ContactLogicInterface was frozen in M1.4 (issue #4) and StagePlugin<ContactLogicInterface>
-  already compiles (test/test_stage_contracts.cpp), so its discovery point is defined
-  now — satisfying issue #6's "(and Contact when ready)". The FSM extraction that
-  populates this file with a stock class is M3.1 (issue #12), which then becomes purely
-  additive.
+  M2.1 defined this discovery point while the FSM was still inline in the host,
+  so that M3.1's extraction would be purely additive. It was: the only change
+  here is the <library> block below.
 
-  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
-  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+  The `<` and `>` of base_class_type must stay XML-escaped. pluginlib compares
+  the attribute against the string StageLoader passes (stage_plugin_bases::
+  kContactLogic), so an unescaped angle bracket is not a parse error with a clear
+  message — it is a class that silently fails to be declared.
 -->
 <class_libraries>
+  <library path="contact_logic_plugins">
+    <class name="default_contact_logic"
+           type="stock_plugins::DefaultContactLogicPlugin"
+           base_class_type="StagePlugin&lt;ContactLogicInterface&gt;">
+      <description>
+        The stock contact reconciliation stage: the per-leg early/late/lost contact FSM that
+        ran inline in the control loop until M3.1, reconciling the planned contact schedule
+        with the sensed foot contacts.
+      </description>
+    </class>
+  </library>
 </class_libraries>

@@ -127,9 +127,8 @@ the same flat parameter map as every other stage parameter (the one key-space of
 [`plugin_lifecycle.md`](plugin_lifecycle.md) §3) rather than in a second channel, so start-up
 configuration stays one vocabulary.
 
-In the shipped configs, `mit_controller_{sim,real}_go2.yaml` carry all five keys explicitly as of
-M2.5; the ULab configs still select through the host's declared defaults. `contact_logic.type` is
-listed above but not yet written by anything: the contact FSM is host code until #12 (M3.1).
+In the shipped configs, `mit_controller_{sim,real}_go2.yaml` carry all six keys explicitly as of
+M2.5 and M3.1; the ULab configs still select through the host's declared defaults.
 
 This supersedes the legacy `gait_sequencer` parameter (`"Simple"` / `"Adaptive"` / `"Bio"`).
 M2.2 does not touch it. M2.4 kept it alive as the *default* of `gs.type` so that YAMLs written
@@ -260,6 +259,6 @@ colcon test-result --verbose
 | #8 | [M2.3] Wrap existing stages as stock plugins | Fills the `<class>` entries the loader resolves; must escape the base strings (§5) and solve the non-PIC link (§6) |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | First consumer: owns the loaders, declares them before the stage pointers (§3), keeps per-cycle dispatch unchanged (§6) — [`pipeline_host.md`](pipeline_host.md) |
 | #10 | [M2.5] YAML schema for stage selection | Ratified the `<stage>.type` convention unchanged and wrote it into the Go2 configs (§4) |
-| #12 | [M3.1] Extract contact FSM | Uses `StageLoader<ContactLogicInterface>` unchanged |
+| #12 | [M3.1] Extract contact FSM | **Done.** Uses `StageLoader<ContactLogicInterface>` unchanged; added `contact_logic.type` |
 | #13 | [M3.2] Runtime WBC / command-type profile | Collapses the WBC instantiation; `stage_plugin_bases::kWBC` changes with the XML |
 | #17 | [M4.2] Example passthrough / logging plugin | Loaded by the same path, from outside this package (§5) |

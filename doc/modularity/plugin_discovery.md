@@ -74,7 +74,7 @@ One description file per stage base class, under `plugins/`:
 | `wbc_plugins.xml` | `StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>` | `wbc_arc_opt` |
 | `wbc_plugins.xml` | `StagePlugin<WBCInterface<CartesianCommands>>` | `inverse_dynamics` |
 | `model_adaptation_plugins.xml` | `StagePlugin<ModelAdaptationInterface>` | `kf_adaptation`, `rls_adaptation` |
-| `contact_logic_plugins.xml` | `StagePlugin<ContactLogicInterface>` | — (M3.1, #12) |
+| `contact_logic_plugins.xml` | `StagePlugin<ContactLogicInterface>` | `default_contact_logic` |
 
 `wbc_plugins.xml` declares **two** base-class-types in one library because `WBCInterface` is still a
 template: `wbc_arc_opt` under the `JointTorqueVelocityPositionCommands` instantiation and
@@ -97,19 +97,20 @@ pluginlib compares against the C++-side string. M2.3's `<class>` entries use the
 Design decisions:
 
 - **One file per stage base, not one combined file.** M2.3 fills them in one stage at a time
-  (reviewable per-stage diffs); M3.1 adds the contact class without touching the others; and #13
+  (reviewable per-stage diffs); M3.1 added the contact class without touching the others; and #13
   (M3.2) reworks **only** `wbc_plugins.xml` when the WBC interface is de-templated
   ([`plugin_lifecycle.md`](plugin_lifecycle.md) §6). Isolating the WBC declaration now contains that
   future churn.
 - **Class lists filled in M2.3.** M2.1 shipped each file as an empty `<class_libraries>` root
   (`pluginlib` reads that as zero declared classes); M2.3 (#8) added one `<library>` per stage —
   `libgait_sequencer_plugins`, `libmpc_plugins`, `libslc_plugins`, `libwbc_plugins`,
-  `libmodel_adaptation_plugins` — each with the stock `<class>` entries above. `contact_logic_plugins.xml`
-  stays empty until M3.1 (#12). The `type:` key vocabulary is M2.5's (#10); these files are
+  `libmodel_adaptation_plugins` — each with the stock `<class>` entries above, and M3.1 (#12) added
+  `default_contact_logic` in `libcontact_logic_plugins`. The `type:` key vocabulary is M2.5's (#10); these files are
   naming-agnostic (the `name=` values are the suggested stock IDs).
-- **The contact file is defined now.** `ContactLogicInterface` was frozen in M1.4 and
+- **The contact file was defined ahead of its class.** `ContactLogicInterface` was frozen in M1.4 and
   `StagePlugin<ContactLogicInterface>` already compiles, so issue #6's "(and Contact when ready)" is
-  satisfiable today. M3.1 (#12) becomes purely additive.
+  satisfiable at that point. M3.1 (#12) was then purely additive: one `<library>` block, no change to
+  the other five files.
 - **Two WBC bases until #13.** `WBCInterface` is still a class template (gap G8), so M2.3 registers
   the Go2 `JointTorqueVelocityPositionCommands` instantiation (`wbc_arc_opt`) and the
   ULab/Cartesian `CartesianCommands` instantiation (`inverse_dynamics`) as two `base_class_type`s in
@@ -162,5 +163,5 @@ Release flags, and the only per-cycle addition is the stock wrapper's forwarding
 | #8 | [M2.3] Wrap existing stages as stock plugins | Fills the `<class>` entries; flips the discovery test's expected count |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns the loaders; keeps per-cycle indirection unchanged — [`pipeline_host.md`](pipeline_host.md) |
 | #10 | [M2.5] YAML schema for stage selection | Owns the `type:` key vocabulary |
-| #12 | [M3.1] Extract contact FSM | Populates `contact_logic_plugins.xml` |
+| #12 | [M3.1] Extract contact FSM | **Done.** Populated `contact_logic_plugins.xml` with `default_contact_logic` |
 | #13 | [M3.2] Runtime WBC / command-type profile | Reworks `wbc_plugins.xml` once the interface is de-templated |

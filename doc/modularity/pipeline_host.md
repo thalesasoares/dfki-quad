@@ -10,7 +10,7 @@ calls · [`plugin_lifecycle.md`](plugin_lifecycle.md) — how a stage comes to l
 M1 froze the stage interfaces and removed the host's casts into concrete stages. M2.1–M2.3 built the
 plugin layer and moved every current algorithm behind it. M2.4 is the consequence: `MITController`
 **constructs no algorithm at all**. It owns the ROS interface, the loops, the locks and the lifetime
-of five plugins, and it talks to them exclusively through the frozen interfaces.
+of six plugins, and it talks to them exclusively through the frozen interfaces.
 
 This is what makes the milestone's exit criterion — "stock Go2 sim path runs via plugins only" —
 a property of the build rather than a promise: the algorithm translation units are no longer
@@ -25,16 +25,20 @@ instantiate even by accident.
 | The three loop timers and their rates, four mutually exclusive callback groups, the 4-thread `MultiThreadedExecutor` | The parameters those algorithms read — it forwards them (§3) but interprets none |
 | The locks that separate the loops, and the double-buffered `GaitSequence` / `WrenchSequence` / `FeetTargets` handoff between them | The choice of *which* implementation runs — that is a parameter (§2) |
 | The stage loaders and stage instances (§4) | The `type:` vocabulary itself, which M2.5 (#10) owns |
-| Contact reconciliation (early / late / lost contact FSM), the swing/stance PD gain switch, the leg command message assembly, the heartbeat counters | — |
+| The swing/stance PD gain switch, the leg command message assembly, the contact logging and the heartbeat counters | Contact reconciliation — the early / late / lost contact FSM, extracted in M3.1 (#12) |
 
-The contact FSM and the PD gain switch are still host code on purpose: #12 (M3.1) extracts the FSM
-behind `ContactLogicInterface`, and #13 (M3.2) turns the command type into a runtime choice. M2.4
-deliberately does not touch either, so that the "thin host" refactor and those behaviour-relevant
-extractions are reviewable separately.
+The PD gain switch is still host code on purpose: #13 (M3.2) turns the command type into a runtime
+choice, and M2.4 deliberately did not touch it so that the "thin host" refactor and that
+behaviour-relevant change stay reviewable separately.
+
+The contact FSM *was* host code through M2.4, for the same reason; M3.1 (#12) moved it behind
+`ContactLogicInterface`, and the host now loads it as the sixth stage. What stayed behind is the
+logging and the `num_early_contacts` counter, driven off the stage's `ContactEvents` — a stage should
+not need a logger or a message type, and keeping those here is what lets it be plain algorithm code.
 
 ## 2. Selecting a stage
 
-Five string parameters, one per stage — the vocabulary proposed in
+Six string parameters, one per stage — the vocabulary proposed in
 [`stage_loading.md`](stage_loading.md) §4:
 
 | Stage | Key | Stock default | Base (`stage_plugin_bases::`) |
@@ -44,6 +48,7 @@ Five string parameters, one per stage — the vocabulary proposed in
 | swing leg controller | `slc.type` | `bezier_swing` | `kSwingLegController` |
 | WBC | `wbc.type` | `wbc_arc_opt` (Go2) / `inverse_dynamics` (ULab) | `kWBC` / `kWBCCartesian` |
 | model adaptation | `model_adaptation.type` | `kf_adaptation` / `rls_adaptation` | `kModelAdaptation` |
+| contact logic | `contact_logic.type` | `default_contact_logic` | `kContactLogic` |
 
 A value that names no declared plugin is a **fatal bring-up error listing what is declared**, never a
 fallback ([`stage_loading.md`](stage_loading.md) §1). `main` catches the exception, logs it with
@@ -75,7 +80,7 @@ declare-time default. That was required while `scripts/joy_to_target.py` switche
 the legacy key: without it, the reload below would resolve the *startup* value of `gs.type` and
 rebuild the sequencer that is already running.
 
-**Since M2.5 (#10) the bridge is inert on the stock Go2 path.** Both Go2 YAMLs now carry all five
+**Since M2.5 (#10) the bridge is inert on the stock Go2 path.** Both Go2 YAMLs now carry all six
 `*.type` keys explicitly, and `joy_to_target.py` sets `gs.type`, so nothing in this repository reads
 or writes the legacy spelling any more — the derivation and the runtime re-derivation are dead weight
 kept for the ULab configs (which still select through the declared defaults) and for out-of-tree
@@ -106,8 +111,8 @@ StageLoader<GaitSequencerInterface>::PluginPtr gs_;                             
 ```
 
 Destroying a `pluginlib::ClassLoader` unloads the library, and a stage instance that outlives its
-loader is a dangling vtable. Members are destroyed in reverse declaration order, so **all five
-loaders are declared before all five stage pointers** and the ordering is correct by construction;
+loader is a dangling vtable. Members are destroyed in reverse declaration order, so **all six
+loaders are declared before all six stage pointers** and the ordering is correct by construction;
 `StageLoader` is additionally non-movable so it cannot be pulled out from under its instances
 ([`plugin_lifecycle.md`](plugin_lifecycle.md) §5).
 
@@ -138,7 +143,7 @@ walking robot must not fall because a parameter update was malformed.
 
 ## 6. Performance
 
-The refactor is startup-cost only. Five `dlopen`s, five parameter-map copies and the model/state
+The refactor is startup-cost only. Six `dlopen`s, six parameter-map copies and the model/state
 clones all happen before any timer exists. The loop bodies are unchanged — same rates
 (`MPC_CONTROL_DT` 100 Hz, `SWING_LEG_DT` / `CONTROL_DT` 500 Hz, `MODEL_ADAPTATION_DT` 100 Hz), same
 callback groups, same locking, same double buffering, no added allocation.
@@ -182,8 +187,9 @@ Both are pre-existing data races, and both are fixed by changing *which lock is 
 control loops*. M2.4's whole reviewability argument — and its no-regression claim — rests on the loop
 bodies being untouched, so mixing a lock-discipline change into it would make the diff impossible to
 read as "same behaviour, different owner of construction". They also overlap the code #12 (M3.1)
-moves and #15 (M3.4) reworks (the model update broadcast), which is where the locking wants to be
-decided once. They should be a change of their own, on top of this one.
+moved and #15 (M3.4) reworks (the model update broadcast), which is where the locking wants to be
+decided once. They should be a change of their own, on top of this one. M3.1 did not change the
+lock discipline either: the contact stage runs under `wbc_lock_`, where the FSM already ran.
 
 ## 9. Related issues
 
@@ -195,7 +201,7 @@ decided once. They should be a change of their own, on top of this one.
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | **This document** |
 | #10 | [M2.5] YAML schema for stage selection | Wrote the `*.type` keys into the Go2 YAMLs and moved the joystick onto `gs.type`; no host behaviour change (§2) |
 | #11 | [M2.6] Go2 sim regression | Acceptance gate for the pipeline this host builds |
-| #12 | [M3.1] Extract contact FSM | Moves the contact reconciliation out of `ControlLoopCallback` (§1) |
+| #12 | [M3.1] Extract contact FSM | **Done.** Moved the contact reconciliation out of `ControlLoopCallback` into the `default_contact_logic` stage (§1) |
 | #13 | [M3.2] Runtime WBC / command-type profile | Collapses `WBCType` and the two WBC bases (§2) |
 | #16 | [M4.1] Bio gait sequencer via plugin param | Becomes a `gs.type` value; no host change needed |
 | #23 | [M5.4] Deprecate monolithic factory paths | Removes the legacy `*.type` derivation (§2) |

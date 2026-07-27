@@ -303,8 +303,8 @@ TEST(StageLoader, BaseClassStringsMatchThePluginSchema) {
 // construct for every stage base and declare exactly the stock IDs M2.3 (#8)
 // added. This is test_plugin_discovery.cpp's assertion re-run through the API the
 // host will actually use, so if StageLoader ever stops pointing at the same
-// package/resource as a bare ClassLoader, it fails here. contact_logic stays
-// empty until M3.1 (#12).
+// package/resource as a bare ClassLoader, it fails here. The contact stage joined
+// the list in M3.1 (#12).
 template <class StageInterface>
 void ExpectProductionLoaderDeclares(const char* base_class_type, std::vector<std::string> expected) {
   StageLoader<StageInterface> loader(base_class_type);
@@ -326,7 +326,8 @@ TEST(StageLoader, ProductionLoadersDeclareStockPluginsForEveryStageBase) {
                                                                   {"inverse_dynamics"});
   ExpectProductionLoaderDeclares<ModelAdaptationInterface>(stage_plugin_bases::kModelAdaptation,
                                                            {"kf_adaptation", "rls_adaptation"});
-  ExpectProductionLoaderDeclares<ContactLogicInterface>(stage_plugin_bases::kContactLogic, {});
+  ExpectProductionLoaderDeclares<ContactLogicInterface>(stage_plugin_bases::kContactLogic,
+                                                        {"default_contact_logic"});
 }
 
 }  // namespace
