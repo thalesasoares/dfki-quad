@@ -160,8 +160,12 @@ performance:
   `-O3` (aarch64), so control-loop code is optimised identically. A `-fPIC`-only Eigen
   `-Wmaybe-uninitialized` false positive (which the non-PIC node never hits) is demoted to non-fatal
   with `-Wno-error=maybe-uninitialized`; every other warning stays a hard error.
-- **Duplicate compilation until M2.4** — the algorithm sources are compiled both here and into
-  `mitcontrollernode`. M2.4 (#9) turns the host into a thin loader and drops them from the node.
+- **The algorithm sources live only here** — M2.3 compiled them both into these libraries and into
+  `mitcontrollernode`; M2.4 (#9) made the host a thin loader and dropped them from the node, so these
+  libraries are now the only place the algorithms are built
+  ([`pipeline_host.md`](pipeline_host.md) §1). `bio_gait_sequencer.cpp` is compiled here too — it has
+  no wrapper until #16 (M4.1), but the target that used to compile it is skipped in the
+  `WITHOUT_DRAKE` lane.
 
 ## 5. What guards it
 

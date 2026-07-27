@@ -22,6 +22,13 @@ static constexpr int N_LEGS = 4;
 static constexpr int N_JOINTS_PER_LEG = 3;
 static constexpr int GAIT_SEQUENCE_SIZE = 100;
 static constexpr int MPC_PREDICTION_HORIZON = 10;
+// The MPC state vector length (single rigid body: orientation, position, angular
+// and linear velocity, gravity). It lives here rather than only as
+// `MPC::STATE_SIZE` because the host validates the `mpc_state_weights_*`
+// parameter length (a vector of `MPC_STATE_SIZE - 1` weights) without knowing the
+// concrete MPC any more (issue #9, M2.4). `MPC::STATE_SIZE` is defined as this
+// constant, so the two cannot drift apart.
+static constexpr int MPC_STATE_SIZE = 13;
 static constexpr double MPC_DT = 0.05;
 static constexpr double MPC_CONTROL_DT = 0.01;
 static constexpr double SWING_LEG_DT = 0.002;

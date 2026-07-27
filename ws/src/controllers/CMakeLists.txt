@@ -227,6 +227,26 @@ if (BUILD_TESTING)
     target_compile_options(test_stock_plugins PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_dependencies(test_stock_plugins
             gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins)
+
+    # ##########################################################################
+    # --- Stage selection test (issue #9, M2.4) --- #
+    # ##########################################################################
+    # Pins the host's stage selection: the legacy `gait_sequencer` / `ma_mode` /
+    # USE_WBC derivation of the `*.type` defaults (include/stage_selection.hpp),
+    # and the fact that every default so derived names a plugin actually declared
+    # for that stage base. The latter needs production ament discovery, hence the
+    # same AMENT_PREFIX_PATH append and plugin-library dependency as
+    # test_stock_plugins; it loads no stage, so no algorithm library is needed.
+    ament_add_gtest(test_stage_selection
+            test/test_stage_selection.cpp
+            APPEND_ENV AMENT_PREFIX_PATH=${CMAKE_INSTALL_PREFIX})
+    target_include_directories(test_stage_selection PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_stage_selection
+            pluginlib common interfaces rclcpp Eigen3)
+    target_compile_options(test_stage_selection PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_dependencies(test_stage_selection
+            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins)
 endif ()
 
 
@@ -323,44 +343,35 @@ endif ()
 # ##############################################################################
 # --- MIT CONTROLLER NODE --- #
 # ##############################################################################
+# The pipeline host (issue #9, M2.4): ROS I/O, loop timers, callback groups and
+# plugin lifetime — and no algorithm code at all. Every algorithm source that used
+# to be compiled in here now lives only in the stock plugin libraries above, which
+# pluginlib dlopens at bring-up. That is what makes "the host cannot construct a
+# concrete stage" a build-time fact rather than a convention: MPC, the gait
+# sequencers, the swing leg controller, the WBCs and the model adaptation
+# estimators are not linked into this executable any more.
+#
+# Consequently the solver/optimiser link line (ARC-OPT + its QP solvers, acados,
+# OsqpEigen, fmt) and the -fpermissive source property for wbc_arc_opt.cpp moved
+# down to the plugin section with the sources they belong to: the frozen stage
+# *interfaces* the host talks to are plain virtual classes over Eigen types.
+#
+# bio_gait_sequencer.cpp is intentionally not here: it has no plugin wrapper until
+# #16 (M4.1) and is compiled by the `mitcontroller` harness and — for the
+# WITHOUT_DRAKE lane, which skips that harness — by gait_sequencer_plugins.
 add_executable(mitcontrollernode
         src/mit_controller_node.cpp
-        src/mit_controller/mpc.cpp
-        src/mit_controller/gait.cpp
-        src/mit_controller/simple_gait_sequencer.cpp
-        src/mit_controller/adaptive_gait_sequencer.cpp
-        src/mit_controller/bio_gait_sequencer.cpp
-        src/mit_controller/mpc_trajectory_planner.cpp
-        src/mit_controller/raibert_foot_step_planner.cpp
-        src/mit_controller/swing_leg_controller.cpp
-        src/mit_controller/inverse_dynamics.cpp
-        src/mit_controller/wbc_arc_opt.cpp
-        src/model_adaptation/least_squares_model_adaptation.cpp
-        src/model_adaptation/kf_model_adaptation.cpp
-        src/SwingTrajectory.cpp
 )
 
-set_source_files_properties(
-        src/mit_controller/wbc_arc_opt.cpp
-        PROPERTIES
-        COMPILE_FLAGS -fpermissive
-)
-
-target_link_libraries(mitcontrollernode
-        PkgConfig::wbc-core
-        PkgConfig::wbc-robot_models-pinocchio
-        PkgConfig::wbc-solvers-eiquadprog
-        PkgConfig::wbc-solvers-qpswift
-        PkgConfig::wbc-solvers-proxqp
-        PkgConfig::wbc-solvers-qpoases
-        PkgConfig::wbc-solvers-osqp
-        PkgConfig::wbc-scenes-acceleration_reduced_tsid
-        PkgConfig::wbc-scenes-acceleration_tsid
-        PkgConfig::wbc-controllers
-        PkgConfig::wbc-types
-        OsqpEigen::OsqpEigen
-        PkgConfig::wbc-solvers-hpipm
-)
+# The stages are loaded, not linked, so the plugin libraries must exist before the
+# node is worth running. Nothing links them; this only orders the build so that a
+# plain `colcon build` never leaves a host without the stock plugins it defaults to.
+add_dependencies(mitcontrollernode
+        gait_sequencer_plugins
+        mpc_plugins
+        slc_plugins
+        wbc_plugins
+        model_adaptation_plugins)
 
 if (ROBOT_NAME STREQUAL "ulab")
     target_compile_definitions(mitcontrollernode PUBLIC ROBOT_MODEL=ULAB)
@@ -373,8 +384,7 @@ else ()
 endif ()
 
 target_compile_options(mitcontrollernode PRIVATE -Wall -Wextra -Wpedantic -Werror)
-ament_target_dependencies(mitcontrollernode Eigen3 common interfaces rclcpp)
-target_link_libraries(mitcontrollernode acados fmt::fmt)
+ament_target_dependencies(mitcontrollernode Eigen3 common interfaces rclcpp pluginlib)
 target_include_directories(
         mitcontrollernode
         PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -417,10 +427,17 @@ set(stock_plugin_common_includes
 # the build; every other warning remains a hard error.
 set(stock_plugin_compile_options -Wall -Wextra -Wpedantic -Werror -Wno-error=maybe-uninitialized)
 
+# bio_gait_sequencer.cpp has no wrapper class yet — #16 (M4.1) adds one — but it is
+# built here so that it still gets compiled at all: M2.4 dropped it from
+# mitcontrollernode along with the other algorithms, and the only other target that
+# compiled it (`mitcontroller`) is skipped in the WITHOUT_DRAKE / onboard lane. It
+# shares every dependency of the two sequencers below, so this costs one TU and
+# keeps the file from silently rotting until #16 wraps it.
 add_library(gait_sequencer_plugins SHARED
         src/plugins/gait_sequencer_plugins.cpp
         src/mit_controller/simple_gait_sequencer.cpp
         src/mit_controller/adaptive_gait_sequencer.cpp
+        src/mit_controller/bio_gait_sequencer.cpp
         src/mit_controller/gait.cpp
         src/mit_controller/mpc_trajectory_planner.cpp
         src/mit_controller/raibert_foot_step_planner.cpp)
@@ -444,10 +461,20 @@ target_include_directories(slc_plugins PRIVATE ${stock_plugin_common_includes})
 ament_target_dependencies(slc_plugins pluginlib rclcpp Eigen3 interfaces)
 target_compile_options(slc_plugins PRIVATE ${stock_plugin_compile_options})
 
-# wbc_arc_opt.cpp keeps its directory-scope -fpermissive source property (set for
-# mitcontrollernode above) and links fmt as header-only so the non-PIC libfmt.a
-# stays off this shared object's link line (stage_loading.md §6). Both WBC classes
-# live here because they are two instantiations of the same template interface
+# wbc_arc_opt.cpp needs -fpermissive: qpSWIFT's Auxilary.h declares members that
+# shadow the type names `kkt` and `stats`, which is an error without it. The
+# property is directory-scoped and used to sit next to mitcontrollernode's source
+# list; M2.4 dropped that list, so it lives here, with the only target that still
+# compiles the file.
+set_source_files_properties(
+        src/mit_controller/wbc_arc_opt.cpp
+        PROPERTIES
+        COMPILE_FLAGS -fpermissive
+)
+
+# wbc_arc_opt.cpp links fmt as header-only so the non-PIC libfmt.a stays off this
+# shared object's link line (stage_loading.md §6). Both WBC classes live here
+# because they are two instantiations of the same template interface
 # (kWBC + kWBCCartesian), registered in the one libwbc_plugins.
 add_library(wbc_plugins SHARED
         src/plugins/wbc_plugins.cpp

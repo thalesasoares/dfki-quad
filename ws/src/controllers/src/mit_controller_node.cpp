@@ -181,20 +181,25 @@ MITController::MITController(const std::string &nodeName)
   mpc_call_back_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   model_adaptation_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
-  // assert that it fits to WBC
+  // Command publisher matching the configured leg control mode.
+  //
+  // The two `assert(typeid(wbc_.get()) == ...)` checks that used to guard this
+  // switch are gone (issue #9): they ran before any WBC existed, and comparing
+  // `typeid` of a *pointer* compares static types, so both were tautologies that
+  // could never fire. The real guard is the runtime-checked command-type
+  // dispatch in ControlLoopCallback (issue #2, gap G8-lite), which logs an error
+  // instead of silently misbehaving when leg_control_mode_ disagrees with the
+  // WBC's compiled command type.
   switch (leg_control_mode_) {
     case JOINT_CONTROL:
       [[fallthrough]];
     case JOINT_TORQUE_CONTROL:
-      assert(typeid(wbc_.get()) == typeid(WBCInterface<JointTorqueVelocityPositionCommands> *)
-             or typeid(wbc_.get()) == typeid(WBCInterface<JointTorqueCommands> *));
       leg_joint_cmd_publisher_ =
           this->create_publisher<interfaces::msg::JointCmd>("leg_joint_cmd", QOS_RELIABLE_NO_DEPTH);
       break;
     case CARTESIAN_STIFFNESS_CONTROL:
       [[fallthrough]];
     case CARTESIAN_JOINT_CONTROL:
-      assert(typeid(wbc_.get()) == typeid(WBCInterface<CartesianCommands> *));
       model_adaptation_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
       leg_cmd_publisher_ = this->create_publisher<interfaces::msg::LegCmd>("leg_cmd", QOS_RELIABLE_NO_DEPTH);
@@ -275,12 +280,35 @@ MITController::MITController(const std::string &nodeName)
   this->declare_parameter<std::vector<double>>("adaptive_gait_sequencer.gait.phase_offset", {0.0, 0.5, 0.5, 0.0});
   this->declare_parameter<std::vector<double>>("adaptive_gait_sequencer.gait.gait_change_froude", {0.02, 0.006});
 
+  // Which implementation each pipeline stage uses. These five strings are the
+  // only thing the host knows about stage selection: they name a pluginlib class
+  // that StageLoader resolves, and an unknown one is a loud bring-up failure, not
+  // a fallback (stage_loading.md §1).
+  //
+  // Their *defaults* are derived from the parameters that used to pick the
+  // implementation inside the host factories, so the shipped YAMLs and launch
+  // files keep working untouched until #10 (M2.5) writes explicit keys. An
+  // explicitly set value always wins. See stage_selection.hpp; #23 (M5.4) drops
+  // the derivation together with the legacy keys.
+  this->declare_parameter<std::string>(
+      stage_selection::kGaitSequencerTypeKey,
+      stage_selection::GaitSequencerTypeFromLegacy(
+          this->get_parameter(stage_selection::kLegacyGaitSequencerKey).as_string()));
+  this->declare_parameter<std::string>(stage_selection::kMPCTypeKey, stage_selection::kAcadosMPCPlugin);
+  this->declare_parameter<std::string>(stage_selection::kSwingLegControllerTypeKey,
+                                       stage_selection::kBezierSwingPlugin);
+  this->declare_parameter<std::string>(stage_selection::kWBCTypeKey, stage_selection::WBCTypeForBuild(USE_WBC));
+  this->declare_parameter<std::string>(
+      stage_selection::kModelAdaptationTypeKey,
+      stage_selection::ModelAdaptationTypeFromLegacy(
+          this->get_parameter(stage_selection::kLegacyModelAdaptationModeKey).as_int()));
+
   on_setparam_callback_handler_ =
       this->add_on_set_parameters_callback([](const std::vector<rclcpp::Parameter> &params) {
         rcl_interfaces::msg::SetParametersResult res;
         for (auto &param : params) {
           if (param.get_name().find("mpc_state_weights") != std::string::npos
-              and param.as_double_array().size() != (MPC::STATE_SIZE - 1)) {
+              and param.as_double_array().size() != (MPC_STATE_SIZE - 1)) {
             res.successful = false;
             res.reason = "MPC state weight vector has wrong size";
             return res;
@@ -314,7 +342,24 @@ MITController::MITController(const std::string &nodeName)
       // SetParameter contract (issue #2) and never needs the concrete stage type. A stage returning
       // false means it did not recognise the key; the host then warns, or for gait parameters falls
       // back to reloading the gait sequencer from scratch (the previous behaviour).
-      if (param.name.find("gait") != std::string::npos) {
+      if (param.name == stage_selection::kLegacyGaitSequencerKey) {
+        // The legacy bridge derives gs.type from gait_sequencer at declare time
+        // (stage_selection.hpp); a runtime change of the legacy key must re-derive it, or the
+        // reload below resolves the startup value of gs.type and rebuilds the sequencer that is
+        // already running instead of the newly selected one. This is how joy_to_target still
+        // switches Simple <-> Adaptive until #10 (M2.5) moves it to the new keys.
+        this->set_parameter(rclcpp::Parameter(
+            stage_selection::kGaitSequencerTypeKey,
+            stage_selection::GaitSequencerTypeFromLegacy(param.value.string_value)));
+        gait_update = true;
+      } else if (param.name == stage_selection::kGaitSequencerTypeKey) {
+        // The new spelling switches the sequencer directly. The set_parameter above re-enters
+        // this callback with a gs.type event; comparing against what is actually loaded turns
+        // that echo into a no-op instead of a second rebuild.
+        if (param.value.string_value != loaded_gs_type_) {
+          gait_update = true;
+        }
+      } else if (param.name.find("gait") != std::string::npos) {
         gait_sequencer_lock_.lock();
         bool applied = gs_->SetParameter(param.name, rclcpp::ParameterValue(param.value));
         gait_sequencer_lock_.unlock();
@@ -395,27 +440,35 @@ MITController::MITController(const std::string &nodeName)
     }
     if (gait_update) {
       RCLCPP_INFO(this->get_logger(), "Gait related parameter has changed, reloading gait sequencer");
-      quad_state_lock_.lock();
-      auto quad_state = std::make_unique<QuadState>(quad_state_);
-      quad_state_lock_.unlock();
-      auto quad_model = std::make_unique<QuadModelPino>(quad_model_);
-      auto gs = GetGaitSequencerFromParams(std::move(quad_model), std::move(quad_state));
-      if (gs) {
+      // Reconfiguration is *replace*, not re-Init (plugin_lifecycle.md §5): build
+      // and initialise a fresh instance off-loop — the expensive part — then swap
+      // it in under the stage lock and let the old one die after the lock is
+      // released. Same three steps as before this refactor, with the loader in
+      // place of the deleted factory.
+      try {
+        auto fresh = gs_loader_.Load(stage_selection::kGaitSequencerTypeKey, MakeStageInit());
+        fresh->UpdateTarget(target_);  // as at bring-up, before the stage goes live
         gait_sequencer_lock_.lock();
-        gs_ = std::move(gs);
+        gs_.swap(fresh);
         gait_sequencer_lock_.unlock();
+        loaded_gs_type_ = this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string();
+        // `fresh` now holds the previous instance and is destroyed here, outside
+        // the lock, so no control loop waits on the old stage's destructor.
+      } catch (const std::runtime_error &error) {
+        // Unlike bring-up, a failed reload must not take down a walking robot:
+        // keep the running gait sequencer and report loudly. StageLoadError and
+        // StageInitError both derive from std::runtime_error.
+        RCLCPP_ERROR(this->get_logger(),
+                     "Could not reload the gait sequencer, keeping the running one: %s",
+                     error.what());
       }
     }
   });
 
-  // Control parts
-  assert(this->get_parameter("mpc_state_weights_stand").as_double_array().size() == (MPC::STATE_SIZE - 1));
-  assert(this->get_parameter("mpc_state_weights_move").as_double_array().size() == (MPC::STATE_SIZE - 1));
-  state_weights_stand_ = Eigen::Map<const Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1>>(
-      this->get_parameter("mpc_state_weights_stand").as_double_array().data());
-  state_weights_move_ = Eigen::Map<const Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1>>(
-      this->get_parameter("mpc_state_weights_move").as_double_array().data());
-
+  // The mpc_state_weights_* asserts and the two Eigen copies they guarded went
+  // with the MPC construction they fed: the MPC stage checks the vector lengths
+  // itself and refuses to initialise, which reports the same mistake as a named
+  // fatal error rather than as an assert that Release compiles out.
   while (!first_quad_state_received_) {
     RCLCPP_INFO_THROTTLE(this->get_logger(),
                          *this->get_clock(),
@@ -425,127 +478,43 @@ MITController::MITController(const std::string &nodeName)
   }
   RCLCPP_INFO(this->get_logger(), "First quad_state received, initializing controller");
 
-  gs_ = GetGaitSequencerFromParams(std::make_unique<QuadModelPino>(quad_model_),
-                                   std::make_unique<QuadState>(quad_state_));
-  if (!gs_) {
-    RCLCPP_ERROR(this->get_logger(), "Could not load gait sequencer from params");
-    rclcpp::shutdown();
-  }
-
-  auto mpc_solver_name = this->get_parameter("mpc_solver").as_string();
-  ocp_qp_solver_t mpc_solver = PARTIAL_CONDENSING_OSQP;
-  if (mpc_solver_name == "PARTIAL_CONDENSING_HPIPM") {
-    mpc_solver = PARTIAL_CONDENSING_HPIPM;
-  } else if (mpc_solver_name == "PARTIAL_CONDENSING_OSQP") {
-    mpc_solver = PARTIAL_CONDENSING_OSQP;
-  } else if (mpc_solver_name == "FULL_CONDENSING_HPIPM") {
-    mpc_solver = FULL_CONDENSING_HPIPM;
-  } else if (mpc_solver_name == "FULL_CONDENSING_DAQP") {
-    mpc_solver = FULL_CONDENSING_DAQP;
-  } else if (mpc_solver_name == "FULL_CONDENSING_QPOASES") {
-    mpc_solver = FULL_CONDENSING_QPOASES;
-  } else if (mpc_solver_name == "PARTIAL_CONDENSING_QPDUNES") {
-    mpc_solver = PARTIAL_CONDENSING_QPDUNES;
-  } else {
-    RCLCPP_ERROR(this->get_logger(), "Unknown mpc solver: %s", mpc_solver_name.c_str());
-    exit(-1);
-  }
-  mpc_ = std::make_unique<MPC>(this->get_parameter("mpc_alpha").as_double(),
-                               state_weights_stand_,
-                               state_weights_move_,
-                               this->get_parameter("mpc_mu").as_double(),
-                               this->get_parameter("mpc_fmin").as_double(),
-                               this->get_parameter("mpc_fmax").as_double(),
-                               std::make_unique<QuadState>(quad_state_),
-                               std::make_unique<QuadModelPino>(quad_model_),
-                               mpc_solver,
-                               this->get_parameter("mpc_condensed_size").as_int(),
-                               this->get_parameter("mpc_hpipm_mode").as_string(),
-                               this->get_parameter("mpc_warm_start").as_int(),
-                               this->get_parameter("mpc_solver_tolerances").as_double(),
-                               this->get_parameter("mpc_osqp_linsys_solver").as_string());
-
+  // Pipeline stages, loaded through pluginlib (issue #9, M2.4).
+  //
+  // What used to stand here — a gait sequencer factory, an mpc_solver string
+  // switch, a model adaptation switch, an SLC constructor and a WBC-constructing
+  // generic lambda — is now five plugin loads. Each stock plugin's `Init` *is*
+  // the factory body that lived here, moved behind the plugin boundary in M2.3
+  // (src/plugins/*_plugins.cpp), so the pipeline is configured from exactly the
+  // same parameters as before.
+  //
+  // Deliberately unguarded: `Load` throws StageLoadError (no such stage) or
+  // StageInitError (the stage cannot configure itself), both fatal for bring-up
+  // and both naming what went wrong — a loader error even lists the declared
+  // alternatives (stage_loading.md §1). `main` reports the message and exits
+  // non-zero. This replaces the previous mix of "log and rclcpp::shutdown()" and
+  // "log and exit(-1)", and it is the one behaviour the modularity work insists
+  // on: never start a quadruped with a stage nobody asked for.
+  //
+  // The order is the construction order of the code this replaces, and every
+  // stage gets its own StageInit (each takes ownership of a model/state clone).
+  gs_ = gs_loader_.Load(stage_selection::kGaitSequencerTypeKey, MakeStageInit());
+  loaded_gs_type_ = this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string();
+  mpc_ = mpc_loader_.Load(stage_selection::kMPCTypeKey, MakeStageInit());
   gs_->UpdateTarget(target_);
-  Eigen::Vector<double, ModelAdaptationInterface::NUM_PARAMS> conv_thresh =
-      Eigen::Map<const Eigen::Vector<double, ModelAdaptationInterface::NUM_PARAMS>>(
-          this->get_parameter("ma_convergence_threshold").as_double_array().data());
-  switch (this->get_parameter("ma_mode").as_int()) {
-    case 1:
-      RCLCPP_INFO(this->get_logger(), "Choosing Recursive Least Squares for Model Adaptation");
-      ma_ = std::make_unique<LeastSquaresModelAdaptation>(
-          std::make_unique<QuadModelPino>(quad_model_),
-          std::make_unique<QuadState>(quad_state_),
-          conv_thresh.setZero(),  // Estimation covariance is not thresholdable here
-          this->get_parameter("ma_forgetting_factor").as_double());
-      break;
-    default: {
-      RCLCPP_INFO(this->get_logger(), "Choosing Kalman Filter for Model Adaptation");
-
-      Eigen::Matrix<double, ModelAdaptationInterface::NUM_PARAMS, ModelAdaptationInterface::NUM_PARAMS> process_noise;
-      process_noise.setIdentity();
-      process_noise.diagonal() = Eigen::Map<const Eigen::Vector<double, ModelAdaptationInterface::NUM_PARAMS>>(
-          this->get_parameter("ma_process_noise").as_double_array().data());
-      Eigen::Matrix<double, 6, 6> measurement_noise;  // 0.1, 0.25, 0.25
-      measurement_noise.setIdentity();
-      measurement_noise.diagonal() = Eigen::Map<const Eigen::Vector<double, 6>>(
-          this->get_parameter("ma_measurement_noise").as_double_array().data());
-
-      ma_ = std::make_unique<KFModelAdaptation>(std::make_unique<QuadModelPino>(quad_model_),
-                                                std::make_unique<QuadState>(quad_state_),
-                                                process_noise,
-                                                measurement_noise,
-                                                9.81,
-                                                conv_thresh);
-      break;
-    }
-  }
-
-  slc_ = std::make_unique<SwingLegController>(
-      this->get_parameter("slc_swing_height").as_double(),
-      this->get_parameter("maximum_swing_leg_progress_to_update_target").as_double(),
-      this->get_parameter("slc_world_blend").as_double(),
-      std::make_unique<QuadModelPino>(quad_model_),
-      std::make_unique<QuadState>(quad_state_));
-
-  // WBCType is fixed at compile time by USE_WBC. A plain if constexpr here would not remove the
-  // casts: in this non-template constructor the discarded branch is still type-checked, so the
-  // concrete WBC would not convert to WBCType* - which is why the previous code needed an unchecked
-  // pointer cast (issue #2, gap G8-lite). Constructing inside a generic lambda makes the branch
-  // dependent on a template parameter, so only the matching construction is compiled and the upcast
-  // to WBCType* is implicit.
-  auto create_wbc = [this](auto use_wbc_tag) -> std::unique_ptr<WBCType> {
-    if constexpr (decltype(use_wbc_tag)::value) {
-      const std::string wbc_solver_name = this->get_parameter("wbc.arc_opt.solver").as_string();
-      const std::string wbc_scene_name = this->get_parameter("wbc.arc_opt.scene").as_string();
-      return std::unique_ptr<WBCType>(new WBCArcOPT(
-          std::make_unique<QuadState>(quad_state_),
-          wbc_solver_name,
-          wbc_scene_name,
-          this->get_parameter("wbc.arc_opt.model_urdf").as_string(),
-          to_array<ModelInterface::N_LEGS>(this->get_parameter("wbc.arc_opt.feet_names").as_string_array()),
-          to_array<ModelInterface::NUM_JOINTS>(this->get_parameter("wbc.arc_opt.joint_names").as_string_array()),
-          this->get_parameter("wbc.arc_opt.mu").as_double(),
-          as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_weight").as_double_array()),
-          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.foot_pose_weight").as_double_array()),
-          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.foot_force_weight").as_double_array()),
-          as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_Kp").as_double_array()),
-          as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_Kd").as_double_array()),
-          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_Kp").as_double_array()),
-          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_Kd").as_double_array()),
-          as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_saturation").as_double_array()),
-          as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_saturation").as_double_array()),
-          this->get_parameter("wbc_solver_tolerances").as_double()));
-    } else {
-      return std::unique_ptr<WBCType>(new InverseDynamics(
-          std::make_unique<QuadModelPino>(quad_model_),
-          std::make_unique<QuadState>(quad_state_),
-          this->get_parameter("wbc.inverse_dynamics.foot_position_based_on_target_height").as_bool(),
-          this->get_parameter("wbc.inverse_dynamics.foot_position_based_on_target_orientation").as_bool(),
-          this->get_parameter("wbc.inverse_dynamics.transformation_filter_size").as_int(),
-          this->get_parameter("wbc.inverse_dynamics.target_velocity_blend").as_double()));
-    }
-  };
-  wbc_ = create_wbc(std::bool_constant<USE_WBC>{});
+  // The model adaptation stage is always loaded, exactly as it was always
+  // constructed; `use_model_adaptation_` still decides whether its loop does
+  // anything.
+  ma_ = ma_loader_.Load(stage_selection::kModelAdaptationTypeKey, MakeStageInit());
+  slc_ = slc_loader_.Load(stage_selection::kSwingLegControllerTypeKey, MakeStageInit());
+  wbc_ = wbc_loader_.Load(stage_selection::kWBCTypeKey, MakeStageInit());
+  RCLCPP_INFO(this->get_logger(),
+              "Pipeline stages loaded: gait sequencer [%s], mpc [%s], swing leg controller [%s], wbc [%s], "
+              "model adaptation [%s]",
+              this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kMPCTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kSwingLegControllerTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kWBCTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kModelAdaptationTypeKey).as_string().c_str());
 
   // Now change modus of le driver acording to this controller
   // comment next paragraph if you want to use controller on bag data
@@ -589,121 +558,27 @@ void MITController::QuadStateUpdateCallback(interfaces::msg::QuadState::SharedPt
   quad_state_ = *quad_state_msg;
   quad_state_lock_.unlock();
 }
-std::unique_ptr<GaitSequencerInterface> MITController::GetGaitSequencerFromParams(
-    std::unique_ptr<ModelInterface> model, std::unique_ptr<StateInterface> state) const {
-  assert(this->get_parameter("gs_shoulder_positions").as_double_array().size() == (N_LEGS * 3));
-  const std::string gait_sequencer = this->get_parameter("gait_sequencer").as_string();
+StageInit MITController::MakeStageInit() {
+  StageInit init;
+  // Model and state clones the stage takes ownership of — the same constructor
+  // injection the concrete stages always had (stage_contracts.md §3). Callers
+  // reach this only after the first /quad_state has arrived, so both are valid
+  // snapshots.
+  init.model = std::make_unique<QuadModelPino>(quad_model_);
+  quad_state_lock_.lock();
+  init.state = std::make_unique<QuadState>(quad_state_);
+  quad_state_lock_.unlock();
 
-  if (gait_sequencer == "Simple") {
-    RCLCPP_INFO(this->get_logger(), "Creating simple gait sequencer");
-    std::string gait_str = this->get_parameter("simple_gait_sequencer.gait").as_string();
-    Gait gait = GaitDatabase::getGait(GaitDatabase::STAND, MPC_DT);  // Default is STAND
-    if (gait_str == "Manual" or gait_str == "MANUAL") {
-      auto df = this->get_parameter("simple_gait_sequencer.manual_gait.duty_factor").as_double_array();
-      auto po = this->get_parameter("simple_gait_sequencer.manual_gait.phase_offset").as_double_array();
-      if (df.size() != N_LEGS or po.size() != N_LEGS) {
-        RCLCPP_ERROR(this->get_logger(), "manual gait parameters have wrong length");
-        return nullptr;
-      }
-      gait = Gait(this->get_parameter("simple_gait_sequencer.manual_gait.period").as_double(),
-                  to_array<N_LEGS>(df),
-                  to_array<N_LEGS>(po),
-                  MPC_DT);
-    } else if (gait_str == "STAND") {
-      gait = GaitDatabase::getGait(GaitDatabase::STAND, MPC_DT);
-    } else if (gait_str == "STATIC_WALK") {
-      gait = GaitDatabase::getGait(GaitDatabase::STATIC_WALK, MPC_DT);
-    } else if (gait_str == "WALKING_TROT") {
-      gait = GaitDatabase::getGait(GaitDatabase::WALKING_TROT, MPC_DT);
-    } else if (gait_str == "TROT") {
-      gait = GaitDatabase::getGait(GaitDatabase::TROT, MPC_DT);
-    } else if (gait_str == "FLYING_TROT") {
-      gait = GaitDatabase::getGait(GaitDatabase::FLYING_TROT, MPC_DT);
-    } else if (gait_str == "PACE") {
-      gait = GaitDatabase::getGait(GaitDatabase::PACE, MPC_DT);
-    } else if (gait_str == "BOUND") {
-      gait = GaitDatabase::getGait(GaitDatabase::BOUND, MPC_DT);
-    } else if (gait_str == "ROTARY_GALLOP") {
-      gait = GaitDatabase::getGait(GaitDatabase::ROTARY_GALLOP, MPC_DT);
-    } else if (gait_str == "TRAVERSE_GALLOP") {
-      gait = GaitDatabase::getGait(GaitDatabase::TRAVERSE_GALLOP, MPC_DT);
-    } else if (gait_str == "PRONK") {
-      gait = GaitDatabase::getGait(GaitDatabase::PRONK, MPC_DT);
-    } else {
-      RCLCPP_ERROR(this->get_logger(), "Unknown gait type [%s]", gait_str.c_str());
-      return nullptr;
-    }
-    RCLCPP_INFO(this->get_logger(), "Create gait of type [%s]", gait_str.c_str());
-
-    return std::make_unique<SimpleGaitSequencer>(
-        gait,
-        this->get_parameter("raibert.k").as_double(),
-        std::array<const Eigen::Vector3d, N_LEGS>{
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 3),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 6),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 9)},
-        std::move(state),
-        std::move(model),
-        this->get_parameter("raibert.filtersize").as_int(),
-        this->get_parameter("raibert.z_on_plane").as_bool(),
-        this->get_parameter("fix_standing_position").as_bool(),
-        this->get_parameter("fix_position_distance_threshold").as_double(),
-        this->get_parameter("fix_position_angular_threshold").as_double(),
-        this->get_parameter("fix_position_velocity_threshold").as_double(),
-        early_contact_detection_);
-
-  } else if (gait_sequencer == "Adaptive") {
-    RCLCPP_INFO(this->get_logger(), "Creating adaptive gait sequencer");
-    auto po = this->get_parameter("adaptive_gait_sequencer.gait.phase_offset").as_double_array();
-    if (po.size() != N_LEGS) {
-      RCLCPP_ERROR(this->get_logger(), "manual gait parameters have wrong length");
-      return nullptr;
-    }
-    return std::make_unique<AdaptiveGaitSequencer>(
-        AdaptiveGait(
-            to_array<N_LEGS>(po),
-            MPC_DT,
-            this->get_parameter("adaptive_gait_sequencer.gait.swing_time").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.filter_size").as_int(),
-            this->get_parameter("adaptive_gait_sequencer.gait.zero_velocity_threshold").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.switch_offsets").as_bool(),
-            to_array<2>(this->get_parameter("adaptive_gait_sequencer.gait.gait_change_froude").as_double_array()),
-            this->get_parameter("adaptive_gait_sequencer.gait.standing_foot_position_threshold").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.min_v_cmd_factor").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.max_correction_cycles").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.correct_all").as_bool(),
-            this->get_parameter("adaptive_gait_sequencer.gait.correction_period").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.disturbance_correction").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.min_v").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.offset_delay").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.max_stride_length").as_double()),
-        this->get_parameter("raibert.k").as_double(),
-        std::array<const Eigen::Vector3d, N_LEGS>{
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 3),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 6),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 9)},
-        std::move(state),
-        std::move(model),
-        this->get_parameter("raibert.filtersize").as_int(),
-        this->get_parameter("raibert.z_on_plane").as_bool(),
-        this->get_parameter("fix_standing_position").as_bool(),
-        this->get_parameter("fix_position_distance_threshold").as_double(),
-        this->get_parameter("fix_position_angular_threshold").as_double(),
-        this->get_parameter("fix_position_velocity_threshold").as_double(),
-        early_contact_detection_);
-
-  } else {
-    RCLCPP_ERROR(this->get_logger(), "Unknown gait sequencer type [%s]", gait_sequencer.c_str());
-    return nullptr;
+  // The node's whole parameter set, flattened to name -> value. Every stage gets
+  // the same map and reads the keys it documents (plugin_lifecycle.md §3), which
+  // is what keeps the host out of the business of knowing which parameter belongs
+  // to which algorithm.
+  const auto parameter_names =
+      this->list_parameters({}, rcl_interfaces::srv::ListParameters::Request::DEPTH_RECURSIVE).names;
+  for (const auto &name : parameter_names) {
+    init.params.emplace(name, this->get_parameter(name).get_parameter_value());
   }
+  return init;
 }
 
 void MITController::QuadControlTargetUpdateCallback(interfaces::msg::QuadControlTarget::SharedPtr quad_target_msg) {
@@ -1309,7 +1184,19 @@ void MITController::HartbeatCallback() {
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<MITController>("mit_controller_node");
+  std::shared_ptr<MITController> node;
+  // Stage selection and stage initialisation fail by throwing (StageLoadError /
+  // StageInitError, stage_loading.md §2). Both are fatal — there is no fallback
+  // stage — so the only thing left to do is put the message where a human bringing
+  // the robot up will read it, and exit non-zero instead of unwinding through an
+  // uncaught exception whose message the terminate handler mangles.
+  try {
+    node = std::make_shared<MITController>("mit_controller_node");
+  } catch (const std::exception &error) {
+    RCLCPP_FATAL(rclcpp::get_logger("mit_controller_node"), "Could not start the controller: %s", error.what());
+    rclcpp::shutdown();
+    return 1;
+  }
   rclcpp::ExecutorOptions exopt;
   rclcpp::executors::MultiThreadedExecutor executor(exopt, 4);
   executor.add_node(node);
