@@ -49,6 +49,11 @@ mit_controller_node: ##### SIMULATION
     simple_gait_sequencer: # Settings for simple gait sequencer
       gait: "STAND" # Select a specific gait from gait database or "Manual"
     wbc:
+      # whole body control. wbc_arc_opt produces joint commands (needs leg_control_mode 0 or 1);
+      # inverse_dynamics produces cartesian commands (needs leg_control_mode 2 or 3). Pinned since
+      # #13 (M3.2): before it, the build flavour picked this and a ULab build could only ever load
+      # inverse_dynamics, so this file's leg_control_mode 0 ("wbc") had no controller to pair with.
+      type: wbc_arc_opt
       inverse_dynamics:
         foot_position_based_on_target_height: false
         foot_position_based_on_target_orientation: false
