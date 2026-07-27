@@ -186,4 +186,4 @@ the interface headers need (pipeline_types.md §6).
 | #9 | [M2.4] Thin PipelineHost | **Drives this contract** — five loads at bring-up, the §5 swap on reconfiguration — [`pipeline_host.md`](pipeline_host.md) |
 | #10 | [M2.5] YAML schema for stage selection | Owns the `type:` keys and any parameter renaming; this contract is naming-agnostic |
 | #13 | [M3.2] Runtime WBC / command-type profile | §6 — collapses the WBC instantiations into one base |
-| #12 | [M3.1] Extract contact FSM | Adds the `StagePlugin<ContactLogicInterface>` base |
+| #12 | [M3.1] Extract contact FSM | **Done.** Added `default_contact_logic` on the `StagePlugin<ContactLogicInterface>` base |
