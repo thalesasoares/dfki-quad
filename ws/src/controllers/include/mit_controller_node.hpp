@@ -22,6 +22,7 @@
 #include "interfaces/msg/wbc_return.hpp"
 #include "interfaces/msg/wbc_target.hpp"
 #include "interfaces/srv/change_leg_driver_mode.hpp"
+#include "mit_controller/contact_logic_interface.hpp"
 #include "mit_controller/gait_sequence_to_msg.hpp"
 #include "mit_controller/gait_sequencer_interface.hpp"
 #include "mit_controller/mit_controller_params.hpp"
@@ -39,8 +40,7 @@
  * The node owns everything that is *not* an algorithm: the ROS interface
  * (subscriptions, publishers, the leg driver service), the three control loops
  * with their timers and mutually exclusive callback groups, the locks that
- * separate them, the contact reconciliation FSM (until #12 / M3.1), and the
- * lifetime of the five pipeline stages.
+ * separate them, and the lifetime of the six pipeline stages.
  *
  * It constructs **no** concrete algorithm. Every stage arrives through
  * `StageLoader` (`mit_controller/stage_loader.hpp`), selected by a `*.type`
@@ -61,8 +61,6 @@ class MITController : public rclcpp::Node {
   };
 
  private:
-  enum LegStatus { SWING, STANCE, EARLY_CONTACT, LATE_CONTACT, LOST_CONTACT };
-
   // Parameters:
   LEGControlMode leg_control_mode_;
   Eigen::Vector3d cartesian_joint_control_swing_Kp_;
@@ -77,10 +75,6 @@ class MITController : public rclcpp::Node {
   Eigen::Vector3d joint_control_swing_Kd_;
   Eigen::Vector3d joint_control_stance_Kp_;
   Eigen::Vector3d joint_control_stance_Kd_;
-  bool early_contact_detection_;
-  bool late_contact_detection_;
-  bool lost_contact_detection_;
-  bool late_contact_reschedule_swing_phase_;
   bool use_model_adaptation_;
 
   // ROS related members
@@ -140,6 +134,7 @@ class MITController : public rclcpp::Node {
   StageLoader<SwingLegControllerInterface> slc_loader_{stage_plugin_bases::kSwingLegController};
   StageLoader<WBCType> wbc_loader_{WBC_PLUGIN_BASE};
   StageLoader<ModelAdaptationInterface> ma_loader_{stage_plugin_bases::kModelAdaptation};
+  StageLoader<ContactLogicInterface> contact_logic_loader_{stage_plugin_bases::kContactLogic};
 
   // The stages themselves. `PluginPtr` carries pluginlib's own deleter, which is
   // part of the pointer type — moving one into a plain std::unique_ptr would
@@ -155,6 +150,11 @@ class MITController : public rclcpp::Node {
   StageLoader<SwingLegControllerInterface>::PluginPtr slc_;
   StageLoader<WBCType>::PluginPtr wbc_;
   StageLoader<ModelAdaptationInterface>::PluginPtr ma_;
+  // The contact reconciliation stage (issue #12, M3.1). It runs inside the
+  // control loop under wbc_lock_, between the swing leg controller's output and
+  // the WBC's input, and owns the per-leg FSM state that used to sit in the four
+  // arrays below this line.
+  StageLoader<ContactLogicInterface>::PluginPtr contact_logic_;
   Target target_;
   GaitSequence gait_sequence_;
   bool gs_updated_;
@@ -163,10 +163,6 @@ class MITController : public rclcpp::Node {
   FeetTargets feet_targets_;
   std::array<double, ModelInterface::N_LEGS> feet_swing_progress_;
   std::array<SwingLegControllerInterface::LegState, ModelInterface::N_LEGS> feet_swing_states_;
-  std::array<Eigen::Vector3d, ModelInterface::N_LEGS> last_feet_pos_targets_;
-  std::array<LegStatus, ModelInterface::N_LEGS> feet_status_;
-  std::array<Eigen::Vector3d, ModelInterface::N_LEGS> early_contact_hold_position_;
-  std::array<Eigen::Vector3d, ModelInterface::N_LEGS> slip_hold_in_body_;
 
   // For sync
   std::mutex quad_state_lock_;
