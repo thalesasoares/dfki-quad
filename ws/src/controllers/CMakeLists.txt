@@ -120,6 +120,24 @@ if (BUILD_TESTING)
     target_compile_options(test_stage_contracts PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
     # ##########################################################################
+    # --- Stock contact logic test (issue #12, M3.1) --- #
+    # ##########################################################################
+    # The behavioural pin for the FSM extracted out of the control loop: every
+    # branch of both switch statements, driven through ContactLogicInterface in
+    # the host's call order. It links the algorithm source directly rather than
+    # going through pluginlib — the plugin *packaging* is covered by
+    # test_stock_plugins / test_plugin_discovery, this covers the policy.
+    # potato_model.cpp supplies the model/state doubles.
+    ament_add_gtest(test_default_contact_logic
+            test/test_default_contact_logic.cpp
+            src/mit_controller/default_contact_logic.cpp
+            src/potato_sim/potato_model.cpp)
+    target_include_directories(test_default_contact_logic PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_default_contact_logic common interfaces rclcpp Eigen3)
+    target_compile_options(test_default_contact_logic PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+    # ##########################################################################
     # --- Plugin discovery smoke test (issue #6, M2.1) --- #
     # ##########################################################################
     # Verifies the six plugin description files are exported for pluginlib
