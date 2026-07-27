@@ -52,7 +52,7 @@ and `exit(-1)`" the deleted factories used.
 
 ### The legacy bridge (temporary)
 
-M2.4 lands before #10 writes these keys into the Go2 YAMLs, so each key's **default** is derived from
+M2.4 landed before #10 wrote these keys into the Go2 YAMLs, so each key's **default** is derived from
 the parameter that used to select the implementation inside the host factory
 (`include/stage_selection.hpp`):
 
@@ -67,9 +67,19 @@ So the shipped YAMLs and launch files keep working untouched, and an explicitly 
 wins. Unrecognised legacy values are **not** corrected: passing them through unchanged is what turns
 a typo into the loader's fail-fast error instead of a silent substitution. The derivation is
 string → string and never names a C++ type, which is why it is not the concrete-algorithm `if/else`
-issue #9 removed. #23 (M5.4) deletes it with the legacy keys;
-`test/test_stage_selection.cpp` pins both the mapping and the fact that every default it produces
-names a declared plugin.
+issue #9 removed. `test/test_stage_selection.cpp` pins both the mapping and the fact that every
+default it produces names a declared plugin.
+
+**A runtime set of `gait_sequencer` re-derives `gs.type`** and reloads the sequencer, not only the
+declare-time default. That was required while `scripts/joy_to_target.py` switched sequencers through
+the legacy key: without it, the reload below would resolve the *startup* value of `gs.type` and
+rebuild the sequencer that is already running.
+
+**Since M2.5 (#10) the bridge is inert on the stock Go2 path.** Both Go2 YAMLs now carry all five
+`*.type` keys explicitly, and `joy_to_target.py` sets `gs.type`, so nothing in this repository reads
+or writes the legacy spelling any more — the derivation and the runtime re-derivation are dead weight
+kept for the ULab configs (which still select through the declared defaults) and for out-of-tree
+configs. That is exactly the precondition #23 (M5.4) needs to delete both.
 
 ## 3. `MakeStageInit`
 
@@ -183,7 +193,7 @@ decided once. They should be a change of their own, on top of this one.
 | #7 | [M2.2] Stage plugin base + loader helper | Provides `StageLoader` — [`stage_loading.md`](stage_loading.md) |
 | #8 | [M2.3] Wrap existing stages as stock plugins | Provides the implementations the host defaults to — [`stock_plugins.md`](stock_plugins.md) |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | **This document** |
-| #10 | [M2.5] YAML schema for stage selection | Writes the `*.type` keys into the Go2 YAMLs; no host change needed |
+| #10 | [M2.5] YAML schema for stage selection | Wrote the `*.type` keys into the Go2 YAMLs and moved the joystick onto `gs.type`; no host behaviour change (§2) |
 | #11 | [M2.6] Go2 sim regression | Acceptance gate for the pipeline this host builds |
 | #12 | [M3.1] Extract contact FSM | Moves the contact reconciliation out of `ControlLoopCallback` (§1) |
 | #13 | [M3.2] Runtime WBC / command-type profile | Collapses `WBCType` and the two WBC bases (§2) |

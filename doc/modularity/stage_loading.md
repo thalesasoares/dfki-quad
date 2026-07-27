@@ -102,7 +102,8 @@ part (library load, construction, parameter parsing) to happen *before* the lock
 
 ## 4. The stage selection parameter
 
-The proposed convention, **one key per stage, string-valued, naming the pluginlib class**:
+The convention — **one key per stage, string-valued, naming the pluginlib class** — proposed here in
+M2.2 and **ratified unchanged by M2.5 (#10)**:
 
 | Stage | Key |
 |---|---|
@@ -117,16 +118,25 @@ Rules: the key is **required** — absent, blank, non-string or unknown is a fat
 no stage is substituted. If a default is ever wanted it belongs in the shipped YAML, where it is
 visible, not inside the loader where it is not.
 
-**M2.5 (#10) owns this vocabulary and may change it.** `StageLoader` therefore never hard-codes a
-key: `Load` takes it as an argument. Renaming `gs.type` costs a change in the host and the YAML and
-nothing in this layer. The key lives in the same flat parameter map as every other stage parameter
-(the one key-space of [`plugin_lifecycle.md`](plugin_lifecycle.md) §3) rather than in a second
-channel, so start-up configuration stays one vocabulary.
+**M2.5 (#10) owned this vocabulary and kept it as proposed**, so the names above are now the schema
+rather than a suggestion. It could have renamed them — `StageLoader` never hard-codes a key, `Load`
+takes it as an argument, and renaming `gs.type` costs a change in the host and the YAML and nothing
+in this layer — but the spelling was already load-bearing in the host, the tests and these
+documents, and the dotted form matches how every other stage parameter is written. The key lives in
+the same flat parameter map as every other stage parameter (the one key-space of
+[`plugin_lifecycle.md`](plugin_lifecycle.md) §3) rather than in a second channel, so start-up
+configuration stays one vocabulary.
 
-This supersedes the legacy `gait_sequencer` parameter (`"Simple"` / `"Adaptive"` / `"Bio"`),
-which M2.4/M2.5 retire. M2.2 does not touch it. M2.4 keeps it alive as the *default* of `gs.type`
-so that YAMLs written before M2.5 still select the same sequencer — the derivation, and its
-removal in #23, are [`pipeline_host.md`](pipeline_host.md) §2.
+In the shipped configs, `mit_controller_{sim,real}_go2.yaml` carry all five keys explicitly as of
+M2.5; the ULab configs still select through the host's declared defaults. `contact_logic.type` is
+listed above but not yet written by anything: the contact FSM is host code until #12 (M3.1).
+
+This supersedes the legacy `gait_sequencer` parameter (`"Simple"` / `"Adaptive"` / `"Bio"`).
+M2.2 does not touch it. M2.4 kept it alive as the *default* of `gs.type` so that YAMLs written
+before M2.5 still select the same sequencer, and M2.5 moved the last runtime caller
+(`scripts/joy_to_target.py`, which switches sequencers from the joystick) onto `gs.type` — so no
+in-tree caller spells the legacy key any more. The derivation, and its removal in #23, are
+[`pipeline_host.md`](pipeline_host.md) §2.
 
 ## 5. The base-class-type strings, and escaping them in XML
 
@@ -249,7 +259,7 @@ colcon test-result --verbose
 | #7 | [M2.2] Stage plugin base + loader helper | **This document** |
 | #8 | [M2.3] Wrap existing stages as stock plugins | Fills the `<class>` entries the loader resolves; must escape the base strings (§5) and solve the non-PIC link (§6) |
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | First consumer: owns the loaders, declares them before the stage pointers (§3), keeps per-cycle dispatch unchanged (§6) — [`pipeline_host.md`](pipeline_host.md) |
-| #10 | [M2.5] YAML schema for stage selection | Ratifies or renames the `<stage>.type` convention (§4) |
+| #10 | [M2.5] YAML schema for stage selection | Ratified the `<stage>.type` convention unchanged and wrote it into the Go2 configs (§4) |
 | #12 | [M3.1] Extract contact FSM | Uses `StageLoader<ContactLogicInterface>` unchanged |
 | #13 | [M3.2] Runtime WBC / command-type profile | Collapses the WBC instantiation; `stage_plugin_bases::kWBC` changes with the XML |
 | #17 | [M4.2] Example passthrough / logging plugin | Loaded by the same path, from outside this package (§5) |

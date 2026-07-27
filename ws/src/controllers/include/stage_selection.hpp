@@ -14,11 +14,11 @@
  *
  * ## The legacy bridge
  *
- * M2.4 lands before the YAML schema work of #10 (M2.5), so the shipped
- * `mit_controller_{sim,real}_go2.yaml` do not carry `*.type` keys yet. To keep
- * "launch still works, unchanged" true across this refactor, the host *declares*
- * each `*.type` parameter with a default derived from the parameter that used to
- * pick the implementation inside the deleted host factories:
+ * M2.4 landed before the YAML schema work of #10 (M2.5), so the shipped configs
+ * carried no `*.type` keys. To keep "launch still works, unchanged" true across
+ * that refactor, the host *declares* each `*.type` parameter with a default
+ * derived from the parameter that used to pick the implementation inside the
+ * deleted host factories:
  *
  * | Key | Legacy source |
  * |---|---|
@@ -29,9 +29,13 @@
  * | `model_adaptation.type` | `ma_mode` (0 = Kalman filter, 1 = recursive least squares) |
  *
  * An explicitly set `*.type` always wins — the derivation only supplies the
- * *default* of the declared parameter. Once M2.5 writes the keys into the YAMLs
- * the derivation becomes dead weight rather than a behaviour, and #23 (M5.4)
- * deletes it together with the legacy keys.
+ * *default* of the declared parameter. M2.5 wrote the keys into
+ * `mit_controller_{sim,real}_go2.yaml` and moved the last runtime caller
+ * (`scripts/joy_to_target.py`) onto `gs.type`, so on the stock Go2 path the
+ * derivation is now dead weight rather than a behaviour. It survives because the
+ * ULab configs still select through the declared defaults and out-of-tree
+ * configs may still spell the legacy keys; #23 (M5.4) deletes it together with
+ * them.
  *
  * This is deliberately **not** a stage factory: it maps strings to strings and
  * never names a C++ type, so the host stays free of the concrete-algorithm
