@@ -108,6 +108,40 @@ TEST(StageSelection, ContactLogicBridgeIgnoresEverythingElse) {
   EXPECT_EQ(stage_selection::ContactLogicKeyFromLegacy(""), nullptr);
 }
 
+// --- 1b. The WBC / leg_control_mode pairing rule (issue #13, M3.2) -----------
+//
+// The host checks this once at bring-up, against the loaded plugin's
+// SupportedCommandMode(); a mismatch refuses to start. The mapping is the half of
+// that check which does not need a node, so it is pinned here. The enum values it
+// is written against are `static_assert`ed at the host's call site.
+
+TEST(StageSelection, JointControlModesNeedAJointCommandWBC) {
+  EXPECT_EQ(stage_selection::WBCCommandModeForLegControlMode(0), WBCCommandMode::kJoint);  // JOINT_CONTROL
+  EXPECT_EQ(stage_selection::WBCCommandModeForLegControlMode(1), WBCCommandMode::kJoint);  // JOINT_TORQUE_CONTROL
+}
+
+TEST(StageSelection, CartesianControlModesNeedACartesianCommandWBC) {
+  // CARTESIAN_STIFFNESS_CONTROL / CARTESIAN_JOINT_CONTROL.
+  EXPECT_EQ(stage_selection::WBCCommandModeForLegControlMode(2), WBCCommandMode::kCartesian);
+  EXPECT_EQ(stage_selection::WBCCommandModeForLegControlMode(3), WBCCommandMode::kCartesian);
+}
+
+TEST(StageSelection, UnknownLegControlModeHasNoCommandMode) {
+  // Not silently joint-or-cartesian: the host reports the bad value instead of
+  // casting it into an out-of-range enum and creating no command publisher.
+  EXPECT_FALSE(stage_selection::WBCCommandModeForLegControlMode(-1).has_value());
+  EXPECT_FALSE(stage_selection::WBCCommandModeForLegControlMode(4).has_value());
+}
+
+// Every mode must be answerable by a *shipped* plugin, or the error message the
+// host builds would tell a user to select something that does not exist.
+TEST(StageSelection, EveryCommandModeNamesADeclaredWBCPlugin) {
+  ExpectDeclared<WBCInterface>(stage_plugin_bases::kWBC,
+                               stage_selection::WBCPluginsForCommandMode(WBCCommandMode::kJoint));
+  ExpectDeclared<WBCInterface>(stage_plugin_bases::kWBC,
+                               stage_selection::WBCPluginsForCommandMode(WBCCommandMode::kCartesian));
+}
+
 // --- 2. The defaults name declared plugins -----------------------------------
 
 TEST(StageSelection, EveryHostDefaultIsADeclaredPlugin) {

@@ -191,6 +191,21 @@ class MITController : public rclcpp::Node {
    */
   StageInit MakeStageInit();
 
+  /**
+   * Refuses a `wbc.type` / `leg_control_mode` pairing the pipeline cannot serve
+   * (issue #13, M3.2). Called once, right after the WBC is loaded.
+   *
+   * `leg_control_mode` picks the command topic the host publishes on; the WBC
+   * plugin decides which command family it can produce. Until M3.2 the two could
+   * not disagree without recompiling, because the command type was a build
+   * flavour. Now both are launch-time choices, so the check is the host's — done
+   * here rather than per cycle, which is also why the control loop's dispatch has
+   * no mismatch branch left.
+   *
+   * @throws StageLoadError naming both parameters and the fix
+   */
+  void ValidateWBCCommandMode();
+
  public:
   MITController(const std::string& nodeName);
   void QuadStateUpdateCallback(interfaces::msg::QuadState::SharedPtr quad_state_msg);

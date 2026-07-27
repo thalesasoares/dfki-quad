@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "mit_controller/contact_logic_interface.hpp"
+#include "mit_controller/wbc_interface.hpp"
 
 /**
  * Which stage implementation the host loads, and how that is spelled in the
@@ -27,7 +29,7 @@
  * | `gs.type` | `gait_sequencer` ("Simple" / "Adaptive") |
  * | `mpc.type` | — (one stock MPC) |
  * | `slc.type` | — (one stock SLC) |
- * | `wbc.type` | `USE_WBC`, i.e. the `ROBOT_MODEL` build flavour |
+ * | `wbc.type` | `USE_WBC`, i.e. the `ROBOT_MODEL` build flavour (a default only, since #13) |
  * | `model_adaptation.type` | `ma_mode` (0 = Kalman filter, 1 = recursive least squares) |
  * | `contact_logic.type` | — (the FSM was inline host code until #12) |
  *
@@ -142,13 +144,65 @@ inline const char* ContactLogicKeyFromLegacy(const std::string& name) {
 }
 
 /**
- * `USE_WBC` → WBC plugin class. The command type of the WBC is still fixed at
- * compile time (`WBCInterface` is a template, gap G8 / issue #13), so the
- * default must follow the build flavour: ARC-OPT with joint commands for Go2,
- * inverse dynamics with cartesian commands for ULab.
+ * `USE_WBC` → the *default* `wbc.type`, nothing more.
+ *
+ * Before #13 (M3.2) this derivation was load-bearing in a second, hidden way:
+ * `WBCInterface` was a class template, so the build flavour also fixed which WBC
+ * instantiation — and therefore which plugin base — the host could load at all
+ * (gap G8). Selecting the other WBC meant a rebuild. That is gone: both stock
+ * WBCs now register under one base and report their command family at runtime,
+ * so **an explicit `wbc.type` always wins, on any build**.
+ *
+ * What survives here is only the default of the declared parameter, for configs
+ * that set no `wbc.type` at all — which, in this repository, means the ULab ones
+ * (the Go2 configs pinned the key in M2.5). That is the documented transitional
+ * limitation for ULab: a ULab launch with no `wbc.type` still gets
+ * `inverse_dynamics` from its build flavour rather than from its config. #23
+ * (M5.4) deletes this function together with the other legacy derivations, at
+ * which point every config must name its stage explicitly.
  */
 inline constexpr const char* WBCTypeForBuild(bool use_wbc) {
   return use_wbc ? kWbcArcOptPlugin : kInverseDynamicsPlugin;
+}
+
+/**
+ * `leg_control_mode` → the WBC command family that mode requires (issue #13, M3.2).
+ *
+ * The two are independent parameters that must agree: `leg_control_mode` decides
+ * which command topic the host publishes on (`leg_joint_cmd` vs `leg_cmd`), and
+ * `wbc.type` decides which controller fills it. Pairing them was previously a
+ * build-flavour invariant nobody could violate without recompiling; now that the
+ * WBC is a launch choice, the host has to check it — once, at bring-up, against
+ * the loaded plugin's `SupportedCommandMode()`.
+ *
+ * Takes the raw parameter value rather than `MITController::LEGControlMode` so
+ * the rule can be tested without constructing a node. The enum lives in
+ * `mit_controller_node.hpp` and its values are pinned against the cases below by
+ * `static_assert`s at the host's validation site.
+ *
+ * @param leg_control_mode the `leg_control_mode` parameter value
+ * @return the required command family, or `std::nullopt` if the value names no
+ *         control mode at all — a config error the host reports rather than
+ *         casting into an out-of-range enum
+ */
+inline std::optional<WBCCommandMode> WBCCommandModeForLegControlMode(int64_t leg_control_mode) {
+  switch (leg_control_mode) {
+    case 0:  // MITController::JOINT_CONTROL
+      [[fallthrough]];
+    case 1:  // MITController::JOINT_TORQUE_CONTROL
+      return WBCCommandMode::kJoint;
+    case 2:  // MITController::CARTESIAN_STIFFNESS_CONTROL
+      [[fallthrough]];
+    case 3:  // MITController::CARTESIAN_JOINT_CONTROL
+      return WBCCommandMode::kCartesian;
+    default:
+      return std::nullopt;
+  }
+}
+
+/** The `wbc.type` values shipping with each command family, for error messages. */
+inline constexpr const char* WBCPluginsForCommandMode(WBCCommandMode mode) {
+  return mode == WBCCommandMode::kJoint ? kWbcArcOptPlugin : kInverseDynamicsPlugin;
 }
 
 }  // namespace stage_selection
