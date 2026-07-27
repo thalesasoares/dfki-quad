@@ -77,11 +77,13 @@ class ContactLogicInterface {
    */
   enum class LegContactState { SWING, STANCE, EARLY_CONTACT, LATE_CONTACT, LOST_CONTACT };
 
-  // These mirror `WBCInterface<T>::FootContact` / `::Wrenches`. They are restated
-  // here rather than reused because `WBCInterface` is a class *template* (gap G8,
-  // issue #13): its member typedefs cannot be named without picking an
-  // instantiation. The layouts are identical, so the host can pass these straight
-  // through. Unify once #13 de-templates `WBCInterface`.
+  // These mirror `WBCInterface::FootContact` / `::Wrenches`, and the host passes
+  // them straight through from this stage into the WBC. They stay restated rather
+  // than reused so that no stage contract has to include a sibling stage's header;
+  // `test_stage_contracts.cpp` `static_assert`s the two spellings are one type, so
+  // the layouts cannot drift apart. (Before #13 they *could not* be reused:
+  // `WBCInterface` was a class template, so naming its typedefs meant picking an
+  // instantiation — gap G8.)
   using FootContacts = std::array<bool, N_LEGS>;
   using Wrenches = std::array<Eigen::Vector3d, N_LEGS>;
 

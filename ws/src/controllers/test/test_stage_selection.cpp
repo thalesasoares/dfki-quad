@@ -122,12 +122,12 @@ TEST(StageSelection, EveryHostDefaultIsADeclaredPlugin) {
                                            stage_selection::ModelAdaptationTypeFromLegacy(0));
   ExpectDeclared<ModelAdaptationInterface>(stage_plugin_bases::kModelAdaptation,
                                            stage_selection::ModelAdaptationTypeFromLegacy(1));
-  // Both WBC flavours, independent of how this test happens to be compiled: the
-  // Go2 build defaults to the joint-command base, ULab to the cartesian one.
-  ExpectDeclared<WBCInterface<JointTorqueVelocityPositionCommands>>(stage_plugin_bases::kWBC,
-                                                                    stage_selection::WBCTypeForBuild(true));
-  ExpectDeclared<WBCInterface<CartesianCommands>>(stage_plugin_bases::kWBCCartesian,
-                                                  stage_selection::WBCTypeForBuild(false));
+  // Both WBC flavours are declared for the one WBC base, independent of how this
+  // test happens to be compiled — the point of #13 (M3.2). WBCTypeForBuild still
+  // maps the build flavour onto a *default* string, so both of its answers must
+  // still name something loadable.
+  ExpectDeclared<WBCInterface>(stage_plugin_bases::kWBC, stage_selection::WBCTypeForBuild(true));
+  ExpectDeclared<WBCInterface>(stage_plugin_bases::kWBC, stage_selection::WBCTypeForBuild(false));
   ExpectDeclared<ContactLogicInterface>(stage_plugin_bases::kContactLogic,
                                         stage_selection::kDefaultContactLogicPlugin);
 }

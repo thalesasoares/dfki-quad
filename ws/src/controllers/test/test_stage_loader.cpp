@@ -291,9 +291,7 @@ TEST(StageLoader, BaseClassStringsMatchThePluginSchema) {
   EXPECT_EQ(std::string(stage_plugin_bases::kGaitSequencer), "StagePlugin<GaitSequencerInterface>");
   EXPECT_EQ(std::string(stage_plugin_bases::kMPC), "StagePlugin<MPCInterface>");
   EXPECT_EQ(std::string(stage_plugin_bases::kSwingLegController), "StagePlugin<SwingLegControllerInterface>");
-  EXPECT_EQ(std::string(stage_plugin_bases::kWBC),
-            "StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>");
-  EXPECT_EQ(std::string(stage_plugin_bases::kWBCCartesian), "StagePlugin<WBCInterface<CartesianCommands>>");
+  EXPECT_EQ(std::string(stage_plugin_bases::kWBC), "StagePlugin<WBCInterface>");
   EXPECT_EQ(std::string(stage_plugin_bases::kModelAdaptation), "StagePlugin<ModelAdaptationInterface>");
   EXPECT_EQ(std::string(stage_plugin_bases::kContactLogic), "StagePlugin<ContactLogicInterface>");
   EXPECT_EQ(std::string(kStagePluginPackage), "controllers");
@@ -320,10 +318,7 @@ TEST(StageLoader, ProductionLoadersDeclareStockPluginsForEveryStageBase) {
   ExpectProductionLoaderDeclares<MPCInterface>(stage_plugin_bases::kMPC, {"acados_mpc"});
   ExpectProductionLoaderDeclares<SwingLegControllerInterface>(stage_plugin_bases::kSwingLegController,
                                                              {"bezier_swing"});
-  ExpectProductionLoaderDeclares<WBCInterface<JointTorqueVelocityPositionCommands>>(stage_plugin_bases::kWBC,
-                                                                                    {"wbc_arc_opt"});
-  ExpectProductionLoaderDeclares<WBCInterface<CartesianCommands>>(stage_plugin_bases::kWBCCartesian,
-                                                                  {"inverse_dynamics"});
+  ExpectProductionLoaderDeclares<WBCInterface>(stage_plugin_bases::kWBC, {"wbc_arc_opt", "inverse_dynamics"});
   ExpectProductionLoaderDeclares<ModelAdaptationInterface>(stage_plugin_bases::kModelAdaptation,
                                                            {"kf_adaptation", "rls_adaptation"});
   ExpectProductionLoaderDeclares<ContactLogicInterface>(stage_plugin_bases::kContactLogic,

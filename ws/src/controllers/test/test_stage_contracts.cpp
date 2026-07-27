@@ -73,12 +73,19 @@ static_assert(IsStageContract<ModelAdaptationInterface>());
 static_assert(IsStageContract<ContactLogicInterface>());
 static_assert(IsStageContract<GaitInterface>());
 
-// `WBCInterface` is still a class template (gap G8, issue #13). Pin the contract
-// for each of the three joint command types in joint_commands.hpp; none may rot
-// before #13 de-templates the interface.
-static_assert(IsStageContract<WBCInterface<JointTorqueVelocityPositionCommands>>());
-static_assert(IsStageContract<WBCInterface<JointTorqueCommands>>());
-static_assert(IsStageContract<WBCInterface<CartesianCommands>>());
+// `WBCInterface` was a class template keyed on the command struct until M3.2
+// (gap G8, issue #13); it is now one interface serving both command families
+// through two getters plus `SupportedCommandMode`.
+static_assert(IsStageContract<WBCInterface>());
+
+// Both getters are part of the contract, on every implementation, regardless of
+// the mode it reports — that is what lets one plugin base carry both families.
+static_assert(std::is_same_v<WBCReturn (WBCInterface::*)(JointTorqueVelocityPositionCommands&),
+                             decltype(&WBCInterface::GetJointCommand)>);
+static_assert(
+    std::is_same_v<WBCReturn (WBCInterface::*)(CartesianCommands&), decltype(&WBCInterface::GetCartesianCommand)>);
+static_assert(
+    std::is_same_v<WBCCommandMode (WBCInterface::*)() const, decltype(&WBCInterface::SupportedCommandMode)>);
 
 // The fakes are concrete: they satisfy the full method table. If an interface
 // gains a pure virtual, its `final` fake turns abstract and these fail.
@@ -88,9 +95,7 @@ static_assert(!std::is_abstract_v<FakeSwingLegController>);
 static_assert(!std::is_abstract_v<FakeModelAdaptation>);
 static_assert(!std::is_abstract_v<FakeContactLogic>);
 static_assert(!std::is_abstract_v<FakeGait>);
-static_assert(!std::is_abstract_v<FakeWBC<JointTorqueVelocityPositionCommands>>);
-static_assert(!std::is_abstract_v<FakeWBC<JointTorqueCommands>>);
-static_assert(!std::is_abstract_v<FakeWBC<CartesianCommands>>);
+static_assert(!std::is_abstract_v<FakeWBC>);
 
 // Contact-reconciliation aggregates are per-leg, sized off pipeline_constants.hpp.
 // Migrated verbatim from the retired contact_logic_interface_check.cpp so the
@@ -113,21 +118,18 @@ static_assert(IsStageContract<StagePlugin<MPCInterface>>());
 static_assert(IsStageContract<StagePlugin<SwingLegControllerInterface>>());
 static_assert(IsStageContract<StagePlugin<ModelAdaptationInterface>>());
 static_assert(IsStageContract<StagePlugin<ContactLogicInterface>>());
-static_assert(IsStageContract<StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>());
-static_assert(IsStageContract<StagePlugin<WBCInterface<JointTorqueCommands>>>());
-static_assert(IsStageContract<StagePlugin<WBCInterface<CartesianCommands>>>());
+static_assert(IsStageContract<StagePlugin<WBCInterface>>());
 static_assert(std::is_base_of_v<GaitSequencerInterface, StagePlugin<GaitSequencerInterface>>);
 static_assert(!std::is_abstract_v<FakePluginGaitSequencer>);
 
 // The host passes contact flags and wrenches straight from ContactLogic into the
-// WBC (§4.6). That is only sound while the layouts match; the interfaces restate
-// the types rather than share them because WBCInterface is a template (issue #13).
-// This pins the compatibility until they are unified.
-static_assert(
-    std::is_same_v<ContactLogicInterface::FootContacts,
-                   WBCInterface<JointTorqueVelocityPositionCommands>::FootContact>);
-static_assert(std::is_same_v<ContactLogicInterface::Wrenches,
-                             WBCInterface<JointTorqueVelocityPositionCommands>::Wrenches>);
+// WBC (§4.6). That is only sound while the layouts match. The two interfaces
+// restate the aliases deliberately — neither includes the other, so no stage
+// contract depends on a sibling's header — and these asserts are what keeps the
+// two spellings one type. Since M3.2 (#13) they are also the *whole* mechanism:
+// there is no longer a template parameter to blame a mismatch on.
+static_assert(std::is_same_v<ContactLogicInterface::FootContacts, WBCInterface::FootContact>);
+static_assert(std::is_same_v<ContactLogicInterface::Wrenches, WBCInterface::Wrenches>);
 
 // -----------------------------------------------------------------------------
 // Layer 2: runtime plumbing through the base pointer.
@@ -195,31 +197,53 @@ TEST(StageContracts, SwingLegControllerCallOrder) {
   EXPECT_FALSE(slc->SetParameter("contract_test.unknown", rclcpp::ParameterValue(0.0)));
 }
 
-// One templated body covering every joint command type; the WBC is the only
-// stage keyed on its command type (issue #13).
-template <class JointCommandType>
-void ExerciseWbc() {
-  std::unique_ptr<WBCInterface<JointCommandType>> wbc = std::make_unique<FakeWBC<JointCommandType>>();
+// Drives the Update* sequence the host uses and returns the WBC still owned
+// through the base pointer, so each mode's test can call its own getter.
+std::unique_ptr<WBCInterface> ExerciseWbcUpdates(WBCCommandMode mode) {
+  std::unique_ptr<WBCInterface> wbc = std::make_unique<FakeWBC>(mode);
   const BrickState state = MakeState();
   const BrickModel model = MakeModel();
 
   wbc->UpdateState(state);
   wbc->UpdateModel(model);
   wbc->UpdateFeetTarget(FeetTargets{});
-  wbc->UpdateWrenches(typename WBCInterface<JointCommandType>::Wrenches{});
-  wbc->UpdateFootContact(typename WBCInterface<JointCommandType>::FootContact{});
+  wbc->UpdateWrenches(WBCInterface::Wrenches{});
+  wbc->UpdateFootContact(WBCInterface::FootContact{});
   wbc->UpdateTarget(Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
                     Eigen::Vector3d::Zero());
-  JointCommandType command{};
-  const WBCReturn ret = wbc->GetJointCommand(command);
 
-  EXPECT_TRUE(ret.success);
+  EXPECT_EQ(wbc->SupportedCommandMode(), mode);
   EXPECT_FALSE(wbc->SetParameter("contract_test.unknown", rclcpp::ParameterValue(0.0)));
+  return wbc;
 }
 
-TEST(StageContracts, WbcTorqueVelocityPositionCallOrder) { ExerciseWbc<JointTorqueVelocityPositionCommands>(); }
-TEST(StageContracts, WbcTorqueCallOrder) { ExerciseWbc<JointTorqueCommands>(); }
-TEST(StageContracts, WbcCartesianCallOrder) { ExerciseWbc<CartesianCommands>(); }
+TEST(StageContracts, WbcJointCallOrder) {
+  std::unique_ptr<WBCInterface> wbc = ExerciseWbcUpdates(WBCCommandMode::kJoint);
+
+  JointTorqueVelocityPositionCommands command{};
+  EXPECT_TRUE(wbc->GetJointCommand(command).success);
+}
+
+TEST(StageContracts, WbcCartesianCallOrder) {
+  std::unique_ptr<WBCInterface> wbc = ExerciseWbcUpdates(WBCCommandMode::kCartesian);
+
+  CartesianCommands command{};
+  EXPECT_TRUE(wbc->GetCartesianCommand(command).success);
+}
+
+// The contract requires the getter of the *other* mode to fail rather than
+// return junk the host might publish (wbc_interface.hpp). The host validates the
+// mode at bring-up and never takes this path, so this pins the stub, not a
+// behaviour anyone relies on.
+TEST(StageContracts, WbcOffModeGetterFails) {
+  std::unique_ptr<WBCInterface> joint_wbc = ExerciseWbcUpdates(WBCCommandMode::kJoint);
+  CartesianCommands cartesian_command{};
+  EXPECT_FALSE(joint_wbc->GetCartesianCommand(cartesian_command).success);
+
+  std::unique_ptr<WBCInterface> cartesian_wbc = ExerciseWbcUpdates(WBCCommandMode::kCartesian);
+  JointTorqueVelocityPositionCommands joint_command{};
+  EXPECT_FALSE(cartesian_wbc->GetJointCommand(joint_command).success);
+}
 
 TEST(StageContracts, ModelAdaptationCallOrder) {
   std::unique_ptr<ModelAdaptationInterface> ma = std::make_unique<FakeModelAdaptation>();

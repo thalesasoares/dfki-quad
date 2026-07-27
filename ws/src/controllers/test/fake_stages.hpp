@@ -112,15 +112,13 @@ class FakeSwingLegController final : public SwingLegControllerInterface {
 };
 
 // --- Whole-body control (§4.4) -----------------------------------------------
-// `WBCInterface` is still a class *template* keyed on the joint command type
-// (gap G8, issue #13). The fake is templated to match, and the test instantiates
-// it for all three command types in joint_commands.hpp so none of them can rot
-// before #13 de-templates the interface.
-template <class JointCommandType>
-class FakeWBC final : public WBCInterface<JointCommandType> {
+// One fake for a now non-template interface (gap G8 closed by issue #13, M3.2).
+// The command family is a runtime property, so the fake takes it as a
+// constructor argument and — like every real implementation — solves in its own
+// mode and stubs the other. Both getters are exercised by the contract test.
+class FakeWBC final : public WBCInterface {
  public:
-  using typename WBCInterface<JointCommandType>::Wrenches;
-  using typename WBCInterface<JointCommandType>::FootContact;
+  explicit FakeWBC(WBCCommandMode mode = WBCCommandMode::kJoint) : mode_(mode) {}
 
   void UpdateState(const StateInterface& quad_state) override { (void)quad_state; }
   void UpdateModel(const ModelInterface& quad_model) override { (void)quad_model; }
@@ -136,8 +134,19 @@ class FakeWBC final : public WBCInterface<JointCommandType> {
     (void)lin_vel;
     (void)ang_vel;
   }
-  WBCReturn GetJointCommand(JointCommandType& joint_command) override {
-    joint_command = JointCommandType{};
+  WBCCommandMode SupportedCommandMode() const override { return mode_; }
+  WBCReturn GetJointCommand(JointTorqueVelocityPositionCommands& joint_command) override {
+    if (mode_ != WBCCommandMode::kJoint) {
+      return WBCReturn{false, 0.0, 0.0};
+    }
+    joint_command = JointTorqueVelocityPositionCommands{};
+    return WBCReturn{true, 0.0, 0.0};
+  }
+  WBCReturn GetCartesianCommand(CartesianCommands& cartesian_command) override {
+    if (mode_ != WBCCommandMode::kCartesian) {
+      return WBCReturn{false, 0.0, 0.0};
+    }
+    cartesian_command = CartesianCommands{};
     return WBCReturn{true, 0.0, 0.0};
   }
   bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override {
@@ -145,6 +154,9 @@ class FakeWBC final : public WBCInterface<JointCommandType> {
     (void)value;
     return false;
   }
+
+ private:
+  WBCCommandMode mode_;
 };
 
 // --- Model adaptation (§4.5) -------------------------------------------------

@@ -175,10 +175,31 @@ TEST(StockPlugins, DefaultContactLogicMissingRequiredKeyThrows) {
   EXPECT_THROW(loader.Load(kTypeKey, MakeInit("default_contact_logic", params)), StageInitError);
 }
 
+// Loaded through the SAME loader and base as wbc_arc_opt below — the runtime
+// proof of #13's acceptance criterion: on this (Go2-flavoured) build, both WBCs
+// are declared for one base and either can be selected without a rebuild. The
+// Cartesian solve path works and the joint getter is the contract's stub.
 TEST(StockPlugins, InverseDynamicsLoadsAndInitialises) {
-  StageLoader<WBCInterface<CartesianCommands>> loader(stage_plugin_bases::kWBCCartesian);
+  StageLoader<WBCInterface> loader(stage_plugin_bases::kWBC);
   auto plugin = loader.Load(kTypeKey, MakeInit("inverse_dynamics", BaseParams()));
   ASSERT_NE(plugin, nullptr);
+  EXPECT_EQ(plugin->SupportedCommandMode(), WBCCommandMode::kCartesian);
+
+  // Init leaves it solvable: seed the per-cycle inputs the host provides, then
+  // take the Cartesian command it is built to produce.
+  WBCInterface::FootContact all_stance{};
+  all_stance.fill(true);
+  plugin->UpdateState(BrickState{});
+  plugin->UpdateFeetTarget(FeetTargets{});
+  plugin->UpdateWrenches(WBCInterface::Wrenches{});
+  plugin->UpdateFootContact(all_stance);
+  plugin->UpdateTarget(Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
+                       Eigen::Vector3d::Zero());
+  CartesianCommands cartesian_command{};
+  EXPECT_TRUE(plugin->GetCartesianCommand(cartesian_command).success);
+
+  JointTorqueVelocityPositionCommands joint_command{};
+  EXPECT_FALSE(plugin->GetJointCommand(joint_command).success);
 }
 
 TEST(StockPlugins, KfAdaptationLoadsAndInitialises) {
@@ -201,9 +222,12 @@ TEST(StockPlugins, RlsAdaptationLoadsAndInitialises) {
 // its library dlopens and constructs — the runtime confirmation that libwbc_plugins
 // links (ARC-OPT shared libs + header-only fmt, no non-PIC libfmt.a).
 TEST(StockPlugins, WbcArcOptLibraryLoadsAndConstructs) {
-  StageLoader<WBCInterface<JointTorqueVelocityPositionCommands>> loader(stage_plugin_bases::kWBC);
+  StageLoader<WBCInterface> loader(stage_plugin_bases::kWBC);
   auto plugin = loader.Create("wbc_arc_opt");
-  EXPECT_NE(plugin, nullptr);
+  ASSERT_NE(plugin, nullptr);
+  // Reportable before Init: the mode is a property of the class, which is what
+  // lets the host validate it against leg_control_mode at bring-up.
+  EXPECT_EQ(plugin->SupportedCommandMode(), WBCCommandMode::kJoint);
 }
 
 // -----------------------------------------------------------------------------
@@ -232,7 +256,7 @@ TEST(StockPlugins, AcadosMpcUnknownSolverThrows) {
 }
 
 TEST(StockPlugins, InverseDynamicsMissingRequiredKeyThrows) {
-  StageLoader<WBCInterface<CartesianCommands>> loader(stage_plugin_bases::kWBCCartesian);
+  StageLoader<WBCInterface> loader(stage_plugin_bases::kWBC);
   ParamMap params = BaseParams();
   params.erase("wbc.inverse_dynamics.foot_position_based_on_target_height");
   EXPECT_THROW(loader.Load(kTypeKey, MakeInit("inverse_dynamics", params)), StageInitError);
