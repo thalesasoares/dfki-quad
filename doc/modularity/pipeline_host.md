@@ -27,9 +27,10 @@ instantiate even by accident.
 | The stage loaders and stage instances (§4) | The `type:` vocabulary itself, which M2.5 (#10) owns |
 | The swing/stance PD gain switch, the leg command message assembly, the contact logging and the heartbeat counters | Contact reconciliation — the early / late / lost contact FSM, extracted in M3.1 (#12) |
 
-The PD gain switch is still host code on purpose: #13 (M3.2) turns the command type into a runtime
-choice, and M2.4 deliberately did not touch it so that the "thin host" refactor and that
-behaviour-relevant change stay reviewable separately.
+The PD gain switch is still host code on purpose: M2.4 deliberately did not touch it so that the
+"thin host" refactor stayed reviewable separately from #13 (M3.2), which turned the command type into
+a runtime choice. #13 has since landed and left the gain switch where it is — it is keyed on
+`leg_control_mode` and the reconciled contact state, neither of which belongs to the WBC stage.
 
 The contact FSM *was* host code through M2.4, for the same reason; M3.1 (#12) moved it behind
 `ContactLogicInterface`, and the host now loads it as the sixth stage. What stayed behind is the
@@ -46,7 +47,7 @@ Six string parameters, one per stage — the vocabulary proposed in
 | gait sequencer | `gs.type` | `simple_gait` / `adaptive_gait` | `kGaitSequencer` |
 | MPC | `mpc.type` | `acados_mpc` | `kMPC` |
 | swing leg controller | `slc.type` | `bezier_swing` | `kSwingLegController` |
-| WBC | `wbc.type` | `wbc_arc_opt` (Go2) / `inverse_dynamics` (ULab) | `kWBC` / `kWBCCartesian` |
+| WBC | `wbc.type` | `wbc_arc_opt` (joint commands) / `inverse_dynamics` (Cartesian) | `kWBC` |
 | model adaptation | `model_adaptation.type` | `kf_adaptation` / `rls_adaptation` | `kModelAdaptation` |
 | contact logic | `contact_logic.type` | `default_contact_logic` | `kContactLogic` |
 
@@ -65,7 +66,7 @@ the parameter that used to select the implementation inside the host factory
 |---|---|
 | `gs.type` | `gait_sequencer`: `Simple` → `simple_gait`, `Adaptive` → `adaptive_gait`, anything else passed through verbatim |
 | `model_adaptation.type` | `ma_mode`: `1` → `rls_adaptation`, anything else → `kf_adaptation` (the old `switch`'s `default:`) |
-| `wbc.type` | `USE_WBC`, i.e. the `ROBOT_MODEL` build flavour |
+| `wbc.type` | `USE_WBC`, i.e. the `ROBOT_MODEL` build flavour. Since #13 (M3.2) this supplies a *default only* — it no longer restricts which WBC the build can load, and all four shipped configs now pin the key explicitly |
 | `mpc.type`, `slc.type` | constant — one stock implementation each |
 
 So the shipped YAMLs and launch files keep working untouched, and an explicitly set `*.type` always
@@ -202,6 +203,6 @@ lock discipline either: the contact stage runs under `wbc_lock_`, where the FSM 
 | #10 | [M2.5] YAML schema for stage selection | Wrote the `*.type` keys into the Go2 YAMLs and moved the joystick onto `gs.type`; no host behaviour change (§2) |
 | #11 | [M2.6] Go2 sim regression | Acceptance gate for the pipeline this host builds |
 | #12 | [M3.1] Extract contact FSM | **Done.** Moved the contact reconciliation out of `ControlLoopCallback` into the `default_contact_logic` stage (§1) |
-| #13 | [M3.2] Runtime WBC / command-type profile | Collapses `WBCType` and the two WBC bases (§2) |
+| #13 | [M3.2] Runtime WBC / command-type profile | **Done.** Deleted `WBCType` / `WBC_PLUGIN_BASE`, collapsed the two WBC bases (§2), and added the bring-up `wbc.type` / `leg_control_mode` compatibility check |
 | #16 | [M4.1] Bio gait sequencer via plugin param | Becomes a `gs.type` value; no host change needed |
 | #23 | [M5.4] Deprecate monolithic factory paths | Removes the legacy `*.type` derivation (§2) |

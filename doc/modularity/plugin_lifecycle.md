@@ -154,14 +154,25 @@ change" is auditable from the wrapper against the cited host lines. See
   construction (M2.4, [`pipeline_host.md`](pipeline_host.md) §4). The M2.2 loader helper preserves
   this property.
 
-## 6. The WBC instantiations
+## 6. The WBC base
 
-`WBCInterface` is still a class template (gap G8, issue #13), so there is no single
-`StagePlugin<WBCInterface>` — only per-command-type instantiations. For M2 the Go2 product path
-registers `StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>` as the WBC plugin base;
-the ULab/Cartesian path may stay on the compile-time factory until #13 de-templates the interface,
-at which point the WBC plugin XML is reworked once. This keeps M2's exit criterion ("stock **Go2**
-sim path runs via plugins only") achievable without pulling #13 forward.
+There is one WBC plugin base, `StagePlugin<WBCInterface>`, like every other stage.
+
+That was not true through M2. `WBCInterface` was a class template keyed on the command struct (gap
+G8, issue #13), so pluginlib saw one unrelated base per instantiation: M2.3 registered `wbc_arc_opt`
+under `StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>` and `inverse_dynamics` under
+`StagePlugin<WBCInterface<CartesianCommands>>`, and the host could only construct a loader for the
+base its build flavour had selected. M2 took that as given — it kept "stock **Go2** sim path runs via
+plugins only" achievable without pulling #13 forward — at the cost of the WBC choice being a rebuild.
+
+M3.2 (#13) removed the template. The command family became a runtime property reported by
+`WBCCommandMode SupportedCommandMode() const`, both getters (`GetJointCommand`,
+`GetCartesianCommand`) are on the one interface, and the implementation that does not produce a
+family returns `{false, 0, 0}` for it. Both stock WBCs now declare the single base in
+`wbc_plugins.xml`, so `wbc.type` selects either from any build. The host pairs the loaded plugin's
+mode against `leg_control_mode` once, right after `Load` — a mismatch is a fatal
+`StageLoadError`, not a per-cycle log line — so nothing on the 500 Hz path pays for the extra
+generality.
 
 ## 7. Guarding
 
@@ -185,5 +196,5 @@ the interface headers need (pipeline_types.md §6).
 | #8 | [M2.3] Wrap existing stages as stock plugins | §4 — adapter wrappers whose `Init` bodies are today's host factory code |
 | #9 | [M2.4] Thin PipelineHost | **Drives this contract** — five loads at bring-up, the §5 swap on reconfiguration — [`pipeline_host.md`](pipeline_host.md) |
 | #10 | [M2.5] YAML schema for stage selection | Owns the `type:` keys and any parameter renaming; this contract is naming-agnostic |
-| #13 | [M3.2] Runtime WBC / command-type profile | §6 — collapses the WBC instantiations into one base |
+| #13 | [M3.2] Runtime WBC / command-type profile | **Done.** §6 — collapsed the WBC instantiations into one base |
 | #12 | [M3.1] Extract contact FSM | **Done.** Added `default_contact_logic` on the `StagePlugin<ContactLogicInterface>` base |

@@ -260,5 +260,5 @@ colcon test-result --verbose
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | First consumer: owns the loaders, declares them before the stage pointers (§3), keeps per-cycle dispatch unchanged (§6) — [`pipeline_host.md`](pipeline_host.md) |
 | #10 | [M2.5] YAML schema for stage selection | Ratified the `<stage>.type` convention unchanged and wrote it into the Go2 configs (§4) |
 | #12 | [M3.1] Extract contact FSM | **Done.** Uses `StageLoader<ContactLogicInterface>` unchanged; added `contact_logic.type` |
-| #13 | [M3.2] Runtime WBC / command-type profile | Collapses the WBC instantiation; `stage_plugin_bases::kWBC` changes with the XML |
+| #13 | [M3.2] Runtime WBC / command-type profile | **Done.** Collapsed the two WBC bases into one; `stage_plugin_bases::kWBC` is now `StagePlugin<WBCInterface>` and `kWBCCartesian` is gone. A breaking change for any out-of-tree WBC plugin XML, which must restate the new base |
 | #17 | [M4.2] Example passthrough / logging plugin | Loaded by the same path, from outside this package (§5) |
