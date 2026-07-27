@@ -51,7 +51,12 @@ class Joy2Target(Node):
 
         self.world_z = self.get_parameter("init_robot_height").get_parameter_value().double_value
         self.world_max_z = self.get_parameter("max_robot_height").get_parameter_value().double_value
-        self.gait_sequencer = "Simple"
+        # The pluginlib class currently loaded in the gait sequencer stage, in the
+        # same spelling the controller YAMLs and `gs.type` use (M2.5, #10). The
+        # value must match the shipped Go2 configs' gs.type, which is what the
+        # controller starts with; a YAML edited to adaptive_gait leaves this stale
+        # until the first Y-press.
+        self.gait_sequencer = "simple_gait"
 
         # zi s not set
         self.js_mapping = {
@@ -310,7 +315,7 @@ class Joy2Target(Node):
         elif (shift_l and A_rising):
             NEW_GAIT = "PRONK"
         elif (shift_l and Y_rising):
-            NEW_GAIT_SEQUENCER = "Simple"
+            NEW_GAIT_SEQUENCER = "simple_gait"
         elif (Right_rising or (alt_r and Up_rising)):
             DELTA_SWING_HEIGHT = 0.0125
         elif (Left_rising or (alt_r and Down_rising)):
@@ -322,25 +327,20 @@ class Joy2Target(Node):
         elif (B_rising):
             NEW_GAIT = "STATIC_WALK"
         elif (Y_rising):
-            NEW_GAIT_SEQUENCER = "Adaptive"
+            NEW_GAIT_SEQUENCER = "adaptive_gait"
 
 
         if (NEW_GAIT != ""):
             param_req = SetParameters.Request()
-            if self.gait_sequencer == "Simple":
+            if self.gait_sequencer == "simple_gait":
                 param_req.parameters = [
                     Parameter(name='simple_gait_sequencer.gait', value=NEW_GAIT).to_parameter_msg()]
-                # if self.gait_sequencer != "Simple":
-                #     self.gait_sequencer = "Simple"
-                #     param_req.parameters.append(
-                #         Parameter(name="gait_sequencer", value=self.gait_sequencer).to_parameter_msg()
-                #     )
-            elif self.gait_sequencer == "Adaptive":
+            elif self.gait_sequencer == "adaptive_gait":
                 if NEW_GAIT == "STAND":
-                    self.gait_sequencer = "Simple"
+                    self.gait_sequencer = "simple_gait"
                     param_req.parameters = [
                         Parameter(name='simple_gait_sequencer.gait', value=NEW_GAIT).to_parameter_msg(),
-                        Parameter(name="gait_sequencer", value=self.gait_sequencer).to_parameter_msg(),
+                        Parameter(name="gs.type", value=self.gait_sequencer).to_parameter_msg(),
                     ]
                 elif "TROT" in NEW_GAIT:
                     param_req.parameters = [
@@ -378,7 +378,7 @@ class Joy2Target(Node):
             self.gait_sequencer = NEW_GAIT_SEQUENCER
             param_req = SetParameters.Request()
             param_req.parameters = [
-                Parameter(name="gait_sequencer", value=self.gait_sequencer).to_parameter_msg(),
+                Parameter(name="gs.type", value=self.gait_sequencer).to_parameter_msg(),
                 Parameter(name='adaptive_gait_sequencer.gait.switch_offsets', value=True).to_parameter_msg(),
             ]
             self.param_client.call_async(param_req)
