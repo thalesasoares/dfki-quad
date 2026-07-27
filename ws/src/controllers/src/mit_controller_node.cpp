@@ -286,10 +286,11 @@ MITController::MITController(const std::string &nodeName)
   // a fallback (stage_loading.md §1).
   //
   // Their *defaults* are derived from the parameters that used to pick the
-  // implementation inside the host factories, so the shipped YAMLs and launch
-  // files keep working untouched until #10 (M2.5) writes explicit keys. An
-  // explicitly set value always wins. See stage_selection.hpp; #23 (M5.4) drops
-  // the derivation together with the legacy keys.
+  // implementation inside the host factories. An explicitly set value always
+  // wins, and since #10 (M2.5) the Go2 YAMLs set all five explicitly, so the
+  // derivation only still selects for the ULab configs and for out-of-tree
+  // configs written before the schema. See stage_selection.hpp; #23 (M5.4)
+  // drops it together with the legacy keys.
   this->declare_parameter<std::string>(
       stage_selection::kGaitSequencerTypeKey,
       stage_selection::GaitSequencerTypeFromLegacy(
@@ -346,8 +347,9 @@ MITController::MITController(const std::string &nodeName)
         // The legacy bridge derives gs.type from gait_sequencer at declare time
         // (stage_selection.hpp); a runtime change of the legacy key must re-derive it, or the
         // reload below resolves the startup value of gs.type and rebuilds the sequencer that is
-        // already running instead of the newly selected one. This is how joy_to_target still
-        // switches Simple <-> Adaptive until #10 (M2.5) moves it to the new keys.
+        // already running instead of the newly selected one. Since #10 (M2.5) moved
+        // joy_to_target onto gs.type, nothing in this repository takes this branch; it stays for
+        // out-of-tree callers that still set the legacy key, until #23 (M5.4) removes both.
         this->set_parameter(rclcpp::Parameter(
             stage_selection::kGaitSequencerTypeKey,
             stage_selection::GaitSequencerTypeFromLegacy(param.value.string_value)));

@@ -247,6 +247,27 @@ if (BUILD_TESTING)
     target_compile_options(test_stage_selection PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_dependencies(test_stage_selection
             gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins)
+
+    # ##########################################################################
+    # --- Go2 YAML stage selection test (issue #10, M2.5) --- #
+    # ##########################################################################
+    # The counterpart of test_stage_selection on the *config* side: it reads the
+    # two installed Go2 YAMLs and pins that they select the stock stack
+    # explicitly, that each selected class is declared, and that no legacy
+    # selector survives beside the new keys. It reads from the install prefix (the
+    # same copy the launch file passes to the node), so it needs both the
+    # AMENT_PREFIX_PATH append and ament_index_cpp; the declared-class check needs
+    # the plugin libraries, as above.
+    ament_add_gtest(test_go2_yaml_stage_selection
+            test/test_go2_yaml_stage_selection.cpp
+            APPEND_ENV AMENT_PREFIX_PATH=${CMAKE_INSTALL_PREFIX})
+    target_include_directories(test_go2_yaml_stage_selection PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_go2_yaml_stage_selection
+            pluginlib ament_index_cpp common interfaces rclcpp Eigen3)
+    target_compile_options(test_go2_yaml_stage_selection PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_dependencies(test_go2_yaml_stage_selection
+            gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins)
 endif ()
 
 
