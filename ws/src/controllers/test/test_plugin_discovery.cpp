@@ -112,9 +112,8 @@ TEST(PluginDiscovery, ClassLoaderDeclaresStockPluginsForEachStageBase) {
       "StagePlugin<WBCInterface<CartesianCommands>>", {"inverse_dynamics"});
   ExpectDeclaresClasses<StagePlugin<ModelAdaptationInterface>>(
       "StagePlugin<ModelAdaptationInterface>", {"kf_adaptation", "rls_adaptation"});
-  // Contact logic stays schema-only until M3.1 (#12) adds the contact class.
   ExpectDeclaresClasses<StagePlugin<ContactLogicInterface>>(
-      "StagePlugin<ContactLogicInterface>", {});
+      "StagePlugin<ContactLogicInterface>", {"default_contact_logic"});
 }
 
 }  // namespace
