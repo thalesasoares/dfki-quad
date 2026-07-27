@@ -298,9 +298,12 @@ parameter; when it is false none of these are called.
 
 **`DoModelAdaptation` is the only mutating stage method in the pipeline.** It takes the host's
 `QuadModelPino` by non-const reference and returns `true` if it changed it. On `true`, the host
-broadcasts the new model to every other stage — `mpc_`, `gs_`, `wbc_`, `slc_` — and publishes it on
-`/quad_model` (`:1009-1032`). This is the model-update fan-out that issue #15 (M3.4) will factor
-into a helper.
+broadcasts the new model to every other stage — `mpc_`, `gs_`, `wbc_`, `slc_`, `contact_logic_` —
+and publishes it on `/quad_model`. Since #15 (M3.4) that fan-out is a registry rather than a
+hardcoded list in `ModelAdaptationCallback`: the host registers each stage once at bring-up with the
+lock its `UpdateModel` runs under, and the callback makes one `Broadcast` call. A stage joins by
+implementing the `UpdateModel` its interface already declares plus one registration line — see
+[`model_update_broadcast.md`](model_update_broadcast.md).
 
 **Call order.** `UpdateState` → `UpdateGaitSequence` → `DoModelAdaptation` → the five `Get*`
 accessors (called unconditionally, for `/quad_model_debug`, whether or not the model changed).
@@ -402,7 +405,7 @@ where the contract is incomplete. Each has an owning follow-up issue.
 | G3 | WBC tuning setters not on the interface | was `reinterpret_cast<InverseDynamics*>` at `:440, 446, 452, 466` | Blocked plugin loading; `InverseDynamics`-specific. **Fixed in M1.2:** dispatched via `WBCInterface::SetParameter`; `WBCArcOPT` returns `false` | #2 — **fixed** |
 | G4 | Missing virtual destructors | `SwingLegControllerInterface`, `WBCInterface`, `ModelAdaptationInterface` had none, yet the host owns all three as `std::unique_ptr<Interface>` (`mit_controller_node.hpp:111-117`) | Deleting through the base pointer was undefined behaviour and leaked the `unique_ptr<ModelInterface>` / `unique_ptr<StateInterface>` each implementation owns | **fixed in M1.1** |
 | G5 | `typeid` guards are dead code | was `:439, 445, 451` comparing `typeid(wbc_.get())` — a *pointer* type — with `typeid(InverseDynamics)` | Never equal, so the three `wbc.inverse_dynamics.*` parameters silently did nothing. **Fixed in M1.2:** dead guards removed; keys routed to `WBCInterface::SetParameter` | #2 — **fixed** |
-| G6 | Inconsistent lock discipline | `ModelAdaptationCallback` mutates `quad_model_` unlocked (`:998`); `gs_->UpdateModel` (`:1014`) and `slc_->UpdateState` (`:816`) run under `mpc_lock_` rather than their own stage lock | The contract cannot state "one mutex per stage" until this is regularised. Model ownership is undefined. **Still open after M2.4:** fixing it edits the loop bodies, which M2.4 left unchanged on purpose so that moving the stages behind pluginlib could be reviewed as behaviour-preserving — see [`pipeline_host.md`](pipeline_host.md) §8 | #9 — deferred |
+| G6 | Inconsistent lock discipline | `ModelAdaptationCallback` mutates `quad_model_` unlocked (`:998`); `gs_->UpdateModel` (`:1014`) and `slc_->UpdateState` (`:816`) run under `mpc_lock_` rather than their own stage lock | The contract cannot state "one mutex per stage" until this is regularised. Model ownership is undefined. **Still open after M3.4**, but no longer spread out: since #15 the broadcast's half of it is one `Register` line at bring-up naming `mpc_lock_` instead of `gait_sequencer_lock_` ([`model_update_broadcast.md`](model_update_broadcast.md) §4), so fixing it there is a one-argument edit. The unlocked `quad_model_` mutation and the `slc_->UpdateState` call are still in the loop bodies, which M2.4 left unchanged on purpose so that moving the stages behind pluginlib could be reviewed as behaviour-preserving — see [`pipeline_host.md`](pipeline_host.md) §8 | #9 — deferred |
 | G7 | Wrong setter called | was `:466-468` — parameter `wbc.inverse_dynamics.transformation_filter_size` called `setFootPositionBasedOnTargetOrientation(integer_value)` instead of `setTransformationFilterSize` | Pre-existing bug; the filter size could not be changed at runtime and a bool setter received an int. **Fixed in M1.2:** `InverseDynamics::SetParameter` calls the correct setter | #2 — **fixed** |
 | G8 | ~~`WBCInterface` is a template~~ | `WBCType` was a `std::conditional<USE_WBC, …>` typedef (`mit_controller_node.hpp:112-114`); `reinterpret_cast` was at `:604, 623, 1257, 1269` | A class template cannot be a pluginlib base class, so the command type had to become a runtime choice. **Partially addressed in M1.2:** all four `reinterpret_cast`s removed (construction and `GetJointCommand` dispatch moved into `if constexpr` templated contexts; a mismatched `leg_control_mode_` became a logged error instead of UB). **Closed by M3.2 (#13):** `WBCInterface` is no longer a template — it declares both getters plus `SupportedCommandMode()`, both stock WBCs register under the one base `StagePlugin<WBCInterface>`, `WBCType`/`WBC_PLUGIN_BASE` are deleted, and the pairing is validated once at bring-up instead of per cycle | #13 ✔ |
 | G9 | `AdaptiveGaitSequencer` config escape hatch | was `dynamic_cast` + `ad_gs->Gait()` at `:316-317`, reaching ~15 `AdaptiveGait` setters | The one *guarded* cast, so not unsafe — but still concrete-type coupling. **Fixed in M1.2:** the ~15 setters moved into `AdaptiveGaitSequencer::SetParameter`; the host no longer `dynamic_cast`s | #2 — **fixed** |
@@ -495,8 +498,10 @@ Not part of the five frozen contracts, but relevant to the modularity work:
   `mit_controller/contact_logic_interface.hpp` (issue #4, M1.4 — header stub only). Extracting the
   implementation into a `DefaultContactLogic` plugin and wiring the host to call it is issue #12
   (M3.1).
-- **The model-update broadcast** (`:1009-1032`) is duplicated logic across four stages and is
-  issue #15 (M3.4).
+- **The model-update broadcast** was duplicated logic across four stages (five after M3.1) written
+  out by hand in `ModelAdaptationCallback`. **Fixed in M3.4** (issue #15): it is a registration
+  block at bring-up plus one `Broadcast` call, and a new stage joins it with a single line — see
+  [`model_update_broadcast.md`](model_update_broadcast.md).
 
 ## 8. Related issues
 
@@ -511,4 +516,4 @@ Not part of the five frozen contracts, but relevant to the modularity work:
 | #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns G6, G10 — both deferred out of M2.4, see [`pipeline_host.md`](pipeline_host.md) §8 |
 | #12 | [M3.1] Extract contact FSM into `ContactLogic` plugin | Implements §4.6; owns G11 |
 | #13 ✔ | [M3.2] Runtime WBC / command-type profile | Owned G8 — closed: `WBCInterface` de-templated, one plugin base, `wbc.type` selectable at launch |
-| #15 | [M3.4] Model update broadcast helper | Consumes §4.5 |
+| #15 ✔ | [M3.4] Model update broadcast helper | Consumed §4.5 — closed: the fan-out is a registry, a stage opts in with the `UpdateModel` its interface already declares plus one registration line, see [`model_update_broadcast.md`](model_update_broadcast.md) |
