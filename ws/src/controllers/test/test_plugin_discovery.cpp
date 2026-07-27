@@ -106,10 +106,10 @@ TEST(PluginDiscovery, ClassLoaderDeclaresStockPluginsForEachStageBase) {
   ExpectDeclaresClasses<StagePlugin<MPCInterface>>("StagePlugin<MPCInterface>", {"acados_mpc"});
   ExpectDeclaresClasses<StagePlugin<SwingLegControllerInterface>>(
       "StagePlugin<SwingLegControllerInterface>", {"bezier_swing"});
-  ExpectDeclaresClasses<StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>(
-      "StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>", {"wbc_arc_opt"});
-  ExpectDeclaresClasses<StagePlugin<WBCInterface<CartesianCommands>>>(
-      "StagePlugin<WBCInterface<CartesianCommands>>", {"inverse_dynamics"});
+  // Both WBCs under one base since #13 (M3.2) — the discovery-level statement of
+  // "the command family is a runtime choice, not a build flavour".
+  ExpectDeclaresClasses<StagePlugin<WBCInterface>>(
+      "StagePlugin<WBCInterface>", {"wbc_arc_opt", "inverse_dynamics"});
   ExpectDeclaresClasses<StagePlugin<ModelAdaptationInterface>>(
       "StagePlugin<ModelAdaptationInterface>", {"kf_adaptation", "rls_adaptation"});
   ExpectDeclaresClasses<StagePlugin<ContactLogicInterface>>(

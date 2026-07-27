@@ -108,6 +108,40 @@ TEST(StageSelection, ContactLogicBridgeIgnoresEverythingElse) {
   EXPECT_EQ(stage_selection::ContactLogicKeyFromLegacy(""), nullptr);
 }
 
+// --- 1b. The WBC / leg_control_mode pairing rule (issue #13, M3.2) -----------
+//
+// The host checks this once at bring-up, against the loaded plugin's
+// SupportedCommandMode(); a mismatch refuses to start. The mapping is the half of
+// that check which does not need a node, so it is pinned here. The enum values it
+// is written against are `static_assert`ed at the host's call site.
+
+TEST(StageSelection, JointControlModesNeedAJointCommandWBC) {
+  EXPECT_EQ(stage_selection::WBCCommandModeForLegControlMode(0), WBCCommandMode::kJoint);  // JOINT_CONTROL
+  EXPECT_EQ(stage_selection::WBCCommandModeForLegControlMode(1), WBCCommandMode::kJoint);  // JOINT_TORQUE_CONTROL
+}
+
+TEST(StageSelection, CartesianControlModesNeedACartesianCommandWBC) {
+  // CARTESIAN_STIFFNESS_CONTROL / CARTESIAN_JOINT_CONTROL.
+  EXPECT_EQ(stage_selection::WBCCommandModeForLegControlMode(2), WBCCommandMode::kCartesian);
+  EXPECT_EQ(stage_selection::WBCCommandModeForLegControlMode(3), WBCCommandMode::kCartesian);
+}
+
+TEST(StageSelection, UnknownLegControlModeHasNoCommandMode) {
+  // Not silently joint-or-cartesian: the host reports the bad value instead of
+  // casting it into an out-of-range enum and creating no command publisher.
+  EXPECT_FALSE(stage_selection::WBCCommandModeForLegControlMode(-1).has_value());
+  EXPECT_FALSE(stage_selection::WBCCommandModeForLegControlMode(4).has_value());
+}
+
+// Every mode must be answerable by a *shipped* plugin, or the error message the
+// host builds would tell a user to select something that does not exist.
+TEST(StageSelection, EveryCommandModeNamesADeclaredWBCPlugin) {
+  ExpectDeclared<WBCInterface>(stage_plugin_bases::kWBC,
+                               stage_selection::WBCPluginsForCommandMode(WBCCommandMode::kJoint));
+  ExpectDeclared<WBCInterface>(stage_plugin_bases::kWBC,
+                               stage_selection::WBCPluginsForCommandMode(WBCCommandMode::kCartesian));
+}
+
 // --- 2. The defaults name declared plugins -----------------------------------
 
 TEST(StageSelection, EveryHostDefaultIsADeclaredPlugin) {
@@ -122,12 +156,12 @@ TEST(StageSelection, EveryHostDefaultIsADeclaredPlugin) {
                                            stage_selection::ModelAdaptationTypeFromLegacy(0));
   ExpectDeclared<ModelAdaptationInterface>(stage_plugin_bases::kModelAdaptation,
                                            stage_selection::ModelAdaptationTypeFromLegacy(1));
-  // Both WBC flavours, independent of how this test happens to be compiled: the
-  // Go2 build defaults to the joint-command base, ULab to the cartesian one.
-  ExpectDeclared<WBCInterface<JointTorqueVelocityPositionCommands>>(stage_plugin_bases::kWBC,
-                                                                    stage_selection::WBCTypeForBuild(true));
-  ExpectDeclared<WBCInterface<CartesianCommands>>(stage_plugin_bases::kWBCCartesian,
-                                                  stage_selection::WBCTypeForBuild(false));
+  // Both WBC flavours are declared for the one WBC base, independent of how this
+  // test happens to be compiled — the point of #13 (M3.2). WBCTypeForBuild still
+  // maps the build flavour onto a *default* string, so both of its answers must
+  // still name something loadable.
+  ExpectDeclared<WBCInterface>(stage_plugin_bases::kWBC, stage_selection::WBCTypeForBuild(true));
+  ExpectDeclared<WBCInterface>(stage_plugin_bases::kWBC, stage_selection::WBCTypeForBuild(false));
   ExpectDeclared<ContactLogicInterface>(stage_plugin_bases::kContactLogic,
                                         stage_selection::kDefaultContactLogicPlugin);
 }

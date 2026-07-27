@@ -210,10 +210,9 @@ MITController::MITController(const std::string &nodeName)
   // The two `assert(typeid(wbc_.get()) == ...)` checks that used to guard this
   // switch are gone (issue #9): they ran before any WBC existed, and comparing
   // `typeid` of a *pointer* compares static types, so both were tautologies that
-  // could never fire. The real guard is the runtime-checked command-type
-  // dispatch in ControlLoopCallback (issue #2, gap G8-lite), which logs an error
-  // instead of silently misbehaving when leg_control_mode_ disagrees with the
-  // WBC's compiled command type.
+  // could never fire. The real guard is `ValidateWBCCommandMode`, which runs once
+  // the WBC has actually been loaded (further down this constructor) and refuses
+  // to start a pipeline whose WBC cannot fill the message created here.
   switch (leg_control_mode_) {
     case JOINT_CONTROL:
       [[fallthrough]];
@@ -546,6 +545,7 @@ MITController::MITController(const std::string &nodeName)
   ma_ = ma_loader_.Load(stage_selection::kModelAdaptationTypeKey, MakeStageInit());
   slc_ = slc_loader_.Load(stage_selection::kSwingLegControllerTypeKey, MakeStageInit());
   wbc_ = wbc_loader_.Load(stage_selection::kWBCTypeKey, MakeStageInit());
+  ValidateWBCCommandMode();
   // The contact stage is loaded last: it sits between the SLC and the WBC in the
   // control loop, and unlike the other five it replaces host code rather than a
   // host factory, so it has no construction order to preserve.
@@ -623,6 +623,41 @@ StageInit MITController::MakeStageInit() {
     init.params.emplace(name, this->get_parameter(name).get_parameter_value());
   }
   return init;
+}
+
+// The `leg_control_mode` vocabulary `stage_selection::WBCCommandModeForLegControlMode` is written
+// against. It takes the raw parameter value so it stays testable without a node, which only works
+// while these agree.
+static_assert(static_cast<int>(MITController::JOINT_CONTROL) == 0);
+static_assert(static_cast<int>(MITController::JOINT_TORQUE_CONTROL) == 1);
+static_assert(static_cast<int>(MITController::CARTESIAN_STIFFNESS_CONTROL) == 2);
+static_assert(static_cast<int>(MITController::CARTESIAN_JOINT_CONTROL) == 3);
+
+void MITController::ValidateWBCCommandMode() {
+  const int64_t leg_control_mode = static_cast<int64_t>(leg_control_mode_);
+  const std::optional<WBCCommandMode> required_mode =
+      stage_selection::WBCCommandModeForLegControlMode(leg_control_mode);
+  if (!required_mode.has_value()) {
+    throw StageLoadError("leg_control_mode " + std::to_string(leg_control_mode)
+                         + " is not a control mode; expected 0 (joint), 1 (joint torque), 2 (cartesian "
+                           "stiffness) or 3 (cartesian joint)");
+  }
+  if (wbc_->SupportedCommandMode() == *required_mode) {
+    return;
+  }
+  // Both are launch-time choices now (#13, M3.2), so nothing but this check stops them disagreeing.
+  // Refuse to start rather than run: a WBC that cannot fill the command message this mode publishes
+  // would leave the loop producing nothing every cycle, which on hardware is a robot that has been
+  // commanded and is not being driven. Name both parameters and the fix, like StageLoader's errors
+  // (stage_loading.md §1).
+  const bool needs_cartesian = *required_mode == WBCCommandMode::kCartesian;
+  throw StageLoadError(
+      "stage '" + this->get_parameter(stage_selection::kWBCTypeKey).as_string() + "' (selected by '"
+      + std::string(stage_selection::kWBCTypeKey) + "') produces "
+      + (needs_cartesian ? "joint" : "cartesian") + " commands, but leg_control_mode "
+      + std::to_string(leg_control_mode) + " needs " + (needs_cartesian ? "cartesian" : "joint")
+      + " commands; either set '" + std::string(stage_selection::kWBCTypeKey) + "' to '"
+      + stage_selection::WBCPluginsForCommandMode(*required_mode) + "' or change leg_control_mode");
 }
 
 void MITController::QuadControlTargetUpdateCallback(interfaces::msg::QuadControlTarget::SharedPtr quad_target_msg) {
@@ -999,63 +1034,41 @@ void MITController::ControlLoopCallback() {
   wbc_->UpdateFootContact(gait);
   wbc_->UpdateWrenches(wrenches);
 
-  // WBCType is fixed at compile time (WBCInterface<CartesianCommands> or
-  // WBCInterface<JointTorqueVelocityPositionCommands>), so only the command type matching this build
-  // can be produced. The previous code unchecked-cast the WBC to the other instantiation, which
-  // was undefined behaviour for a mismatched leg_control_mode_ (issue #2, gap G8-lite). The generic
-  // lambda below is a templated context, so its if constexpr discards the branch that does not match
-  // WBCType: only the compatible command path is compiled, and it calls the interface directly. A
-  // mismatch between the runtime leg_control_mode_ and the compiled command type is now a logged
-  // error instead of silent UB. Fully de-templating WBCInterface for a runtime command-type choice
-  // remains issue #13's scope.
+  // Which getter serves this cycle follows leg_control_mode_ alone. Before #13 (M3.2) the WBC's
+  // command type was a compile-time property (a std::conditional typedef over USE_WBC), so this had
+  // to be an `if constexpr` inside a generic lambda to keep the incompatible branch from being
+  // compiled at all — and a leg_control_mode_ the build could not serve was a per-cycle logged
+  // error. Both are gone: the interface carries both getters, and the loaded plugin's
+  // SupportedCommandMode() is checked against leg_control_mode_ once at bring-up, so reaching this
+  // switch at all means the pairing is already known good. The cost is unchanged — one virtual call
+  // through the same stage pointer, into the same solver.
   static WBCReturn wbc_return;
-  auto solve_and_publish = [this](auto *wbc) -> WBCReturn {
-    using CommandType = typename std::remove_pointer_t<decltype(wbc)>::JOINT_COMMAND_TYPE;
-    if constexpr (std::is_same_v<CommandType, CartesianCommands>) {
-      switch (leg_control_mode_) {
-        case CARTESIAN_JOINT_CONTROL:
-          [[fallthrough]];
-        case CARTESIAN_STIFFNESS_CONTROL: {
-          leg_cmd_.header.stamp = this->get_clock()->now();
-          CartesianCommands commands;
-          WBCReturn ret = wbc->GetJointCommand(commands);
-          assign(commands.position, leg_cmd_.ee_pos);
-          assign(commands.velocity, leg_cmd_.ee_vel);
-          assign(commands.force, leg_cmd_.ee_force);
-          leg_cmd_publisher_->publish(leg_cmd_);
-          return ret;
-        }
-        default:
-          RCLCPP_ERROR(this->get_logger(),
-                       "leg_control_mode_ %d needs a joint-command WBC, but this build uses a "
-                       "cartesian-command WBC",
-                       static_cast<int>(leg_control_mode_));
-          return {false, 0.0, 0.0};
-      }
-    } else {
-      switch (leg_control_mode_) {
-        case JOINT_TORQUE_CONTROL:
-          [[fallthrough]];
-        case JOINT_CONTROL: {
-          leg_joint_cmd_.header.stamp = this->get_clock()->now();
-          JointTorqueVelocityPositionCommands commands;
-          WBCReturn ret = wbc->GetJointCommand(commands);
-          assign(commands.velocity, leg_joint_cmd_.velocity);
-          assign(commands.position, leg_joint_cmd_.position);
-          assign(commands.torque, leg_joint_cmd_.effort);
-          leg_joint_cmd_publisher_->publish(leg_joint_cmd_);
-          return ret;
-        }
-        default:
-          RCLCPP_ERROR(this->get_logger(),
-                       "leg_control_mode_ %d needs a cartesian-command WBC, but this build uses a "
-                       "joint-command WBC",
-                       static_cast<int>(leg_control_mode_));
-          return {false, 0.0, 0.0};
-      }
+  switch (leg_control_mode_) {
+    case CARTESIAN_JOINT_CONTROL:
+      [[fallthrough]];
+    case CARTESIAN_STIFFNESS_CONTROL: {
+      leg_cmd_.header.stamp = this->get_clock()->now();
+      CartesianCommands commands;
+      wbc_return = wbc_->GetCartesianCommand(commands);
+      assign(commands.position, leg_cmd_.ee_pos);
+      assign(commands.velocity, leg_cmd_.ee_vel);
+      assign(commands.force, leg_cmd_.ee_force);
+      leg_cmd_publisher_->publish(leg_cmd_);
+      break;
     }
-  };
-  wbc_return = solve_and_publish(wbc_.get());
+    case JOINT_TORQUE_CONTROL:
+      [[fallthrough]];
+    case JOINT_CONTROL: {
+      leg_joint_cmd_.header.stamp = this->get_clock()->now();
+      JointTorqueVelocityPositionCommands commands;
+      wbc_return = wbc_->GetJointCommand(commands);
+      assign(commands.velocity, leg_joint_cmd_.velocity);
+      assign(commands.position, leg_joint_cmd_.position);
+      assign(commands.torque, leg_joint_cmd_.effort);
+      leg_joint_cmd_publisher_->publish(leg_joint_cmd_);
+      break;
+    }
+  }
   auto wbc_end_time = std::chrono::high_resolution_clock::now();
   wbc_solve_time = std::chrono::duration_cast<std::chrono::duration<double>>(wbc_end_time - wbc_start_time).count();
   wbc_lock_.unlock();

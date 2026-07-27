@@ -99,14 +99,14 @@ static_assert(static_cast<int>(GaitSequence::MOVE) == 1);
 static_assert(std::is_abstract_v<GaitSequencerInterface>);
 static_assert(std::is_abstract_v<MPCInterface>);
 static_assert(std::is_abstract_v<SwingLegControllerInterface>);
-static_assert(std::is_abstract_v<WBCInterface<JointTorqueVelocityPositionCommands>>);
+static_assert(std::is_abstract_v<WBCInterface>);
 static_assert(std::is_abstract_v<ContactLogicInterface>);
 static_assert(std::is_abstract_v<ModelAdaptationInterface>);
 
 static_assert(std::is_abstract_v<StagePlugin<GaitSequencerInterface>>);
 static_assert(std::is_abstract_v<StagePlugin<MPCInterface>>);
 static_assert(std::is_abstract_v<StagePlugin<SwingLegControllerInterface>>);
-static_assert(std::is_abstract_v<StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>);
+static_assert(std::is_abstract_v<StagePlugin<WBCInterface>>);
 static_assert(std::is_abstract_v<StagePlugin<ContactLogicInterface>>);
 static_assert(std::is_abstract_v<StagePlugin<ModelAdaptationInterface>>);
 
@@ -123,8 +123,7 @@ static_assert(!std::is_move_assignable_v<StageLoader<GaitSequencerInterface>>);
 static_assert(std::is_same_v<StageLoader<MPCInterface>::Plugin, StagePlugin<MPCInterface>>);
 static_assert(std::is_same_v<StageLoader<SwingLegControllerInterface>::Plugin,
                              StagePlugin<SwingLegControllerInterface>>);
-static_assert(std::is_same_v<StageLoader<WBCInterface<JointTorqueVelocityPositionCommands>>::Plugin,
-                             StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>>);
+static_assert(std::is_same_v<StageLoader<WBCInterface>::Plugin, StagePlugin<WBCInterface>>);
 static_assert(std::is_same_v<StageLoader<ContactLogicInterface>::Plugin, StagePlugin<ContactLogicInterface>>);
 static_assert(std::is_same_v<StageLoader<ModelAdaptationInterface>::Plugin, StagePlugin<ModelAdaptationInterface>>);
 

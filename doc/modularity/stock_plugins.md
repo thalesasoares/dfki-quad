@@ -24,7 +24,7 @@ behaviour change** (issue #8 acceptance criterion 3). Each plugin is a thin adap
 | `acados_mpc` | `AcadosMpcPlugin` | `MPC` | `libmpc_plugins` | `kMPC` |
 | `bezier_swing` | `BezierSwingPlugin` | `SwingLegController` | `libslc_plugins` | `kSwingLegController` |
 | `wbc_arc_opt` | `WbcArcOptPlugin` | `WBCArcOPT` | `libwbc_plugins` | `kWBC` |
-| `inverse_dynamics` | `InverseDynamicsPlugin` | `InverseDynamics` | `libwbc_plugins` | `kWBCCartesian` |
+| `inverse_dynamics` | `InverseDynamicsPlugin` | `InverseDynamics` | `libwbc_plugins` | `kWBC` |
 | `kf_adaptation` | `KfAdaptationPlugin` | `KFModelAdaptation` | `libmodel_adaptation_plugins` | `kModelAdaptation` |
 | `rls_adaptation` | `RlsAdaptationPlugin` | `LeastSquaresModelAdaptation` | `libmodel_adaptation_plugins` | `kModelAdaptation` |
 | `default_contact_logic` | `DefaultContactLogicPlugin` | `DefaultContactLogic` | `libcontact_logic_plugins` | `kContactLogic` |
@@ -39,10 +39,12 @@ factory to mirror — see §2 — and its "no behaviour change" claim rests on
 (#16). The `name=` values are the suggested stock ids; the selection-key vocabulary belongs to M2.5
 (#10), so these are naming-agnostic.
 
-Two `WBCInterface` instantiations exist because the interface is still a template (gap G8): the Go2
-joint-command path (`kWBC`) and the ULab/ikin Cartesian path (`kWBCCartesian`). Both classes live in
-the one `libwbc_plugins` and are declared under their respective base strings in `wbc_plugins.xml`.
-#13 (M3.2) collapses them into one when `WBCInterface` is de-templated.
+Both WBCs declare the one base `kWBC` (`StagePlugin<WBCInterface>`) in `wbc_plugins.xml` and live in
+the one `libwbc_plugins`. Until M3.2 they could not: the interface was a class template (gap G8), so
+the joint-command path (`kWBC`) and the ULab/ikin Cartesian path (`kWBCCartesian`) were two unrelated
+bases and the build flavour decided which one the host could load. #13 (M3.2) de-templated
+`WBCInterface`, moving the command family onto `SupportedCommandMode()`; the wrappers forward both
+getters to their implementation, which solves in its own family and stubs the other.
 
 ## 2. Where each `Init` came from
 

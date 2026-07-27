@@ -75,7 +75,10 @@ mit_controller_node: ##### REAL SYSTEM
         gait_change_froude: [ 0.018, 0.012 ]
         # gait_change_froude: [0.009, 0.005]
     wbc:
-      type: wbc_arc_opt # whole body control: wbc_arc_opt (go2 build) | inverse_dynamics (ulab build)
+      # whole body control. wbc_arc_opt produces joint commands (needs leg_control_mode 0 or 1);
+      # inverse_dynamics produces cartesian commands (needs leg_control_mode 2 or 3). Since #13
+      # (M3.2) either is loadable by any build — this key selects, the build flavour does not.
+      type: wbc_arc_opt
       inverse_dynamics:
         foot_position_based_on_target_height: false
         foot_position_based_on_target_orientation: false

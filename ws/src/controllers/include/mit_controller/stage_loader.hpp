@@ -68,13 +68,13 @@ namespace stage_plugin_bases {
 inline constexpr char kGaitSequencer[] = "StagePlugin<GaitSequencerInterface>";
 inline constexpr char kMPC[] = "StagePlugin<MPCInterface>";
 inline constexpr char kSwingLegController[] = "StagePlugin<SwingLegControllerInterface>";
-inline constexpr char kWBC[] = "StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>";
-// The Cartesian WBC instantiation, added in M2.3 (issue #8) so `inverse_dynamics`
-// — which implements WBCInterface<CartesianCommands>, the ULab/ikin command type
-// — can be a stock plugin like every other current algorithm. plugin_lifecycle.md
-// §6 anticipated one WBC base per joint-command type; #13 (M3.2) collapses both
-// WBC bases into one once WBCInterface stops being a template.
-inline constexpr char kWBCCartesian[] = "StagePlugin<WBCInterface<CartesianCommands>>";
+// One base for every WBC since #13 (M3.2). M2.3 (issue #8) had to declare two —
+// the interface was a class template, so `wbc_arc_opt` and `inverse_dynamics`
+// implemented different types and pluginlib saw two unrelated bases. Now the
+// command family is reported at runtime (`WBCCommandMode`), so both are
+// interchangeable plugins of one base, which is what makes `wbc.type` a launch
+// choice rather than a rebuild.
+inline constexpr char kWBC[] = "StagePlugin<WBCInterface>";
 inline constexpr char kModelAdaptation[] = "StagePlugin<ModelAdaptationInterface>";
 inline constexpr char kContactLogic[] = "StagePlugin<ContactLogicInterface>";
 

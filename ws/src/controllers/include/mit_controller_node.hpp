@@ -112,16 +112,11 @@ class MITController : public rclcpp::Node {
 
   // Controller related members
   //
-  // The WBC command type is still fixed at compile time: `WBCInterface` is a
-  // class template (gap G8), so there is one pluginlib base per instantiation
-  // (plugin_lifecycle.md §6). Go2 builds the joint-command WBC, ULab the
-  // cartesian one; #13 (M3.2) collapses the two. Everything else about the WBC
-  // is identical to the other stages.
-  typedef std::conditional<USE_WBC,
-                           WBCInterface<JointTorqueVelocityPositionCommands>,
-                           WBCInterface<CartesianCommands>>::type WBCType;
-  static constexpr const char *WBC_PLUGIN_BASE =
-      USE_WBC ? stage_plugin_bases::kWBC : stage_plugin_bases::kWBCCartesian;
+  // Since #13 (M3.2) the WBC is an ordinary stage: `WBCInterface` is no longer a
+  // class template, so there is one pluginlib base for every WBC and the command
+  // family is a runtime property of the loaded plugin (`SupportedCommandMode`).
+  // Which of the two getters the control loop calls follows `leg_control_mode_`,
+  // validated against the loaded plugin once at bring-up.
 
   // One loader per stage base class. **Declared before the stage pointers on
   // purpose**: members are destroyed in reverse declaration order, and
@@ -132,7 +127,7 @@ class MITController : public rclcpp::Node {
   StageLoader<GaitSequencerInterface> gs_loader_{stage_plugin_bases::kGaitSequencer};
   StageLoader<MPCInterface> mpc_loader_{stage_plugin_bases::kMPC};
   StageLoader<SwingLegControllerInterface> slc_loader_{stage_plugin_bases::kSwingLegController};
-  StageLoader<WBCType> wbc_loader_{WBC_PLUGIN_BASE};
+  StageLoader<WBCInterface> wbc_loader_{stage_plugin_bases::kWBC};
   StageLoader<ModelAdaptationInterface> ma_loader_{stage_plugin_bases::kModelAdaptation};
   StageLoader<ContactLogicInterface> contact_logic_loader_{stage_plugin_bases::kContactLogic};
 
@@ -148,7 +143,7 @@ class MITController : public rclcpp::Node {
   // legacy-key re-derivation (see the gs.type branch there).
   std::string loaded_gs_type_;
   StageLoader<SwingLegControllerInterface>::PluginPtr slc_;
-  StageLoader<WBCType>::PluginPtr wbc_;
+  StageLoader<WBCInterface>::PluginPtr wbc_;
   StageLoader<ModelAdaptationInterface>::PluginPtr ma_;
   // The contact reconciliation stage (issue #12, M3.1). It runs inside the
   // control loop under wbc_lock_, between the swing leg controller's output and
@@ -195,6 +190,21 @@ class MITController : public rclcpp::Node {
    * do the work the deleted constructors did.
    */
   StageInit MakeStageInit();
+
+  /**
+   * Refuses a `wbc.type` / `leg_control_mode` pairing the pipeline cannot serve
+   * (issue #13, M3.2). Called once, right after the WBC is loaded.
+   *
+   * `leg_control_mode` picks the command topic the host publishes on; the WBC
+   * plugin decides which command family it can produce. Until M3.2 the two could
+   * not disagree without recompiling, because the command type was a build
+   * flavour. Now both are launch-time choices, so the check is the host's — done
+   * here rather than per cycle, which is also why the control loop's dispatch has
+   * no mismatch branch left.
+   *
+   * @throws StageLoadError naming both parameters and the fix
+   */
+  void ValidateWBCCommandMode();
 
  public:
   MITController(const std::string& nodeName);

@@ -85,7 +85,7 @@ struct StageInit {
  * plus the initialisation phase. One template covers all stages because the
  * lifecycle is identical; each stage registers its own instantiation as the
  * pluginlib base (e.g. `StagePlugin<GaitSequencerInterface>`,
- * `StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>`).
+ * `StagePlugin<WBCInterface>`).
  *
  * Lifecycle (plugin_lifecycle.md §2):
  *   1. The loader default-constructs the plugin. The constructor must be cheap

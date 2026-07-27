@@ -516,9 +516,10 @@ set_source_files_properties(
 )
 
 # wbc_arc_opt.cpp links fmt as header-only so the non-PIC libfmt.a stays off this
-# shared object's link line (stage_loading.md §6). Both WBC classes live here
-# because they are two instantiations of the same template interface
-# (kWBC + kWBCCartesian), registered in the one libwbc_plugins.
+# shared object's link line (stage_loading.md §6). Both WBC classes live here and
+# register under the one base (kWBC) in the one libwbc_plugins. This library has
+# always been built robot-agnostically, which is what lets #13 (M3.2) make the WBC
+# a launch-time choice without touching the build.
 add_library(wbc_plugins SHARED
         src/plugins/wbc_plugins.cpp
         src/mit_controller/wbc_arc_opt.cpp

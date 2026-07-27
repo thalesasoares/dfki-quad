@@ -211,7 +211,7 @@ void WBCArcOPT::UpdateTarget(const Eigen::Quaterniond& orientation,
   com_target_.acceleration.setZero();
 }
 
-void WBCArcOPT::UpdateFootContact(const WBCInterface<JointTorqueCommands>::FootContact& foot_contact) {
+void WBCArcOPT::UpdateFootContact(const FootContact& foot_contact) {
   for (unsigned int feet_idx = 0; feet_idx < ModelInterface::N_LEGS; feet_idx++) {
 #ifdef FEET_FORCE_TASK
     wbc_foot_contact_tasks_[feet_idx]->setActivation(foot_contact[feet_idx]);
@@ -224,7 +224,7 @@ void WBCArcOPT::UpdateFootContact(const WBCInterface<JointTorqueCommands>::FootC
   wbc_robot_model_->setContacts(active_foot_contacts_);  // TODO: fasten this up via getActiveContacts
 }
 
-void WBCArcOPT::UpdateWrenches(const WBCInterface<JointTorqueCommands>::Wrenches& wrenches) {
+void WBCArcOPT::UpdateWrenches(const Wrenches& wrenches) {
   for (unsigned int feet_idx = 0; feet_idx < ModelInterface::N_LEGS; feet_idx++) {
     wbc::types::Wrench target_wrench;
     target_wrench.force = wrenches[feet_idx];

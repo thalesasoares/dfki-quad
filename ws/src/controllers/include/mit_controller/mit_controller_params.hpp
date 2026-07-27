@@ -10,6 +10,13 @@
 // What remains below is host-only and is *not* part of the exported surface: the
 // `PUBLISH_*` diagnostic switches and the `USE_WBC` selector, which depends on
 // the `ROBOT_MODEL` compile definition that only this package's targets set.
+//
+// `USE_WBC` no longer selects any code path. Until #13 (M3.2) it also fixed the
+// WBC's command type at compile time, and with it the only WBC the build could
+// load; now it feeds exactly one thing — the *default* of the `wbc.type`
+// parameter (`stage_selection::WBCTypeForBuild`) — and an explicit `wbc.type`
+// overrides it on any build. #23 (M5.4) removes it along with the other legacy
+// derivations.
 
 #include "mit_controller/pipeline_constants.hpp"
 

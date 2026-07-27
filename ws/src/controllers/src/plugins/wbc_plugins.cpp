@@ -5,12 +5,12 @@
 // (mit_controller_node.cpp:516-547): the true branch is wbc_arc_opt, the false
 // branch is inverse_dynamics.
 //
-// WBCInterface is still a class template (gap G8, #13), so the two WBCs implement
-// different instantiations and therefore register under two different plugin
-// bases in the SAME library (stage_plugin_bases::kWBC for the Go2
-// JointTorqueVelocityPositionCommands path, kWBCCartesian for the Cartesian
-// path). #13 (M3.2) collapses both into one once the interface stops being a
-// template. See plugin_lifecycle.md §6.
+// Since #13 (M3.2) both register under the SAME pluginlib base
+// (stage_plugin_bases::kWBC = "StagePlugin<WBCInterface>"): the interface is no
+// longer a class template, and the command family each one produces is reported
+// at runtime through SupportedCommandMode(). Each adapter forwards both getters
+// to its implementation, which solves in its own mode and stubs the other
+// (wbc_interface.hpp). See plugin_lifecycle.md §6.
 //
 // This translation unit links fmt as header-only (FMT_HEADER_ONLY, set by the
 // build) because wbc_arc_opt.cpp uses fmt::format/print and the image's static
@@ -38,10 +38,10 @@
 namespace stock_plugins {
 
 /**
- * Stock plugin wrapping WBCArcOPT (WBCInterface<JointTorqueVelocityPositionCommands>,
- * the Go2 / joint-command path). Init mirrors mit_controller_node.cpp:516-537.
+ * Stock plugin wrapping WBCArcOPT (the joint-command WBC, `WBCCommandMode::kJoint`).
+ * Init mirrors mit_controller_node.cpp:516-537.
  */
-class WbcArcOptPlugin final : public StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>> {
+class WbcArcOptPlugin final : public StagePlugin<WBCInterface> {
  public:
   void Init(StageInit init) override {
     // Named locals: as_eigen_vector returns an Eigen::Map view, so the backing
@@ -96,8 +96,16 @@ class WbcArcOptPlugin final : public StagePlugin<WBCInterface<JointTorqueVelocit
                     const Eigen::Vector3d& ang_vel) override {
     impl_->UpdateTarget(orientation, position, lin_vel, ang_vel);
   }
+  // Answered from the implementation's class constant rather than forwarded to impl_: the command
+  // family is a property of the plugin *class* — it is even stated in wbc_plugins.xml — so it must
+  // be readable on a default-constructed plugin, before Init has built the implementation. Every
+  // other method here forwards, because every other method is about the running stage.
+  WBCCommandMode SupportedCommandMode() const override { return WBCArcOPT::kCommandMode; }
   WBCReturn GetJointCommand(JointTorqueVelocityPositionCommands& joint_command) override {
     return impl_->GetJointCommand(joint_command);
+  }
+  WBCReturn GetCartesianCommand(CartesianCommands& cartesian_command) override {
+    return impl_->GetCartesianCommand(cartesian_command);
   }
   bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override {
     return impl_->SetParameter(name, value);
@@ -108,10 +116,11 @@ class WbcArcOptPlugin final : public StagePlugin<WBCInterface<JointTorqueVelocit
 };
 
 /**
- * Stock plugin wrapping InverseDynamics (WBCInterface<CartesianCommands>, the
- * ULab / Cartesian path). Init mirrors mit_controller_node.cpp:539-545.
+ * Stock plugin wrapping InverseDynamics (the Cartesian-command WBC,
+ * `WBCCommandMode::kCartesian`, the ULab / ikin path). Init mirrors
+ * mit_controller_node.cpp:539-545.
  */
-class InverseDynamicsPlugin final : public StagePlugin<WBCInterface<CartesianCommands>> {
+class InverseDynamicsPlugin final : public StagePlugin<WBCInterface> {
  public:
   void Init(StageInit init) override {
     impl_ = std::make_unique<InverseDynamics>(
@@ -134,7 +143,12 @@ class InverseDynamicsPlugin final : public StagePlugin<WBCInterface<CartesianCom
                     const Eigen::Vector3d& ang_vel) override {
     impl_->UpdateTarget(orientation, position, lin_vel, ang_vel);
   }
-  WBCReturn GetJointCommand(CartesianCommands& joint_command) override {
+  // Answered from the class constant, not forwarded — see WbcArcOptPlugin::SupportedCommandMode.
+  WBCCommandMode SupportedCommandMode() const override { return InverseDynamics::kCommandMode; }
+  WBCReturn GetCartesianCommand(CartesianCommands& cartesian_command) override {
+    return impl_->GetCartesianCommand(cartesian_command);
+  }
+  WBCReturn GetJointCommand(JointTorqueVelocityPositionCommands& joint_command) override {
     return impl_->GetJointCommand(joint_command);
   }
   bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override {
@@ -147,5 +161,5 @@ class InverseDynamicsPlugin final : public StagePlugin<WBCInterface<CartesianCom
 
 }  // namespace stock_plugins
 
-PLUGINLIB_EXPORT_CLASS(stock_plugins::WbcArcOptPlugin, StagePlugin<WBCInterface<JointTorqueVelocityPositionCommands>>)
-PLUGINLIB_EXPORT_CLASS(stock_plugins::InverseDynamicsPlugin, StagePlugin<WBCInterface<CartesianCommands>>)
+PLUGINLIB_EXPORT_CLASS(stock_plugins::WbcArcOptPlugin, StagePlugin<WBCInterface>)
+PLUGINLIB_EXPORT_CLASS(stock_plugins::InverseDynamicsPlugin, StagePlugin<WBCInterface>)

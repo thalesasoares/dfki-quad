@@ -146,14 +146,16 @@ void ExpectStockGo2Selection(const std::string& config_file) {
                                        stage_selection::kContactLogicTypeKey,
                                        stage_plugin_bases::kContactLogic,
                                        stage_selection::kDefaultContactLogicPlugin);
-  // The Go2 configs are only ever loaded by a Go2 build, whose WBC takes joint
-  // commands (USE_WBC == true); the ULab flavour has its own configs and is
-  // covered by test_stage_selection.
-  ExpectSelects<WBCInterface<JointTorqueVelocityPositionCommands>>(params,
-                                                                   config_file,
-                                                                   stage_selection::kWBCTypeKey,
-                                                                   stage_plugin_bases::kWBC,
-                                                                   stage_selection::WBCTypeForBuild(true));
+  // Since #13 (M3.2) the Go2 configs pin a WBC that any build can load — the
+  // key names a plugin, not a build flavour. WBCTypeForBuild(true) is still the
+  // value the pinned key must agree with: it is what a Go2 build would have
+  // defaulted to, and #23 (M5.4) deletes the derivation once nothing relies on
+  // a default at all.
+  ExpectSelects<WBCInterface>(params,
+                              config_file,
+                              stage_selection::kWBCTypeKey,
+                              stage_plugin_bases::kWBC,
+                              stage_selection::WBCTypeForBuild(true));
 }
 
 /** No legacy selector survives next to the explicit keys. */
