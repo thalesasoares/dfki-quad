@@ -148,6 +148,10 @@ class MITController : public rclcpp::Node {
   // interface, because StagePlugin<I> derives from I.
   StageLoader<MPCInterface>::PluginPtr mpc_;
   StageLoader<GaitSequencerInterface>::PluginPtr gs_;
+  // The gs.type value gs_ was actually loaded from — lets the parameter event
+  // callback tell a real sequencer switch apart from the echo of its own
+  // legacy-key re-derivation (see the gs.type branch there).
+  std::string loaded_gs_type_;
   StageLoader<SwingLegControllerInterface>::PluginPtr slc_;
   StageLoader<WBCType>::PluginPtr wbc_;
   StageLoader<ModelAdaptationInterface>::PluginPtr ma_;

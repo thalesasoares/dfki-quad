@@ -342,7 +342,24 @@ MITController::MITController(const std::string &nodeName)
       // SetParameter contract (issue #2) and never needs the concrete stage type. A stage returning
       // false means it did not recognise the key; the host then warns, or for gait parameters falls
       // back to reloading the gait sequencer from scratch (the previous behaviour).
-      if (param.name.find("gait") != std::string::npos) {
+      if (param.name == stage_selection::kLegacyGaitSequencerKey) {
+        // The legacy bridge derives gs.type from gait_sequencer at declare time
+        // (stage_selection.hpp); a runtime change of the legacy key must re-derive it, or the
+        // reload below resolves the startup value of gs.type and rebuilds the sequencer that is
+        // already running instead of the newly selected one. This is how joy_to_target still
+        // switches Simple <-> Adaptive until #10 (M2.5) moves it to the new keys.
+        this->set_parameter(rclcpp::Parameter(
+            stage_selection::kGaitSequencerTypeKey,
+            stage_selection::GaitSequencerTypeFromLegacy(param.value.string_value)));
+        gait_update = true;
+      } else if (param.name == stage_selection::kGaitSequencerTypeKey) {
+        // The new spelling switches the sequencer directly. The set_parameter above re-enters
+        // this callback with a gs.type event; comparing against what is actually loaded turns
+        // that echo into a no-op instead of a second rebuild.
+        if (param.value.string_value != loaded_gs_type_) {
+          gait_update = true;
+        }
+      } else if (param.name.find("gait") != std::string::npos) {
         gait_sequencer_lock_.lock();
         bool applied = gs_->SetParameter(param.name, rclcpp::ParameterValue(param.value));
         gait_sequencer_lock_.unlock();
@@ -434,6 +451,7 @@ MITController::MITController(const std::string &nodeName)
         gait_sequencer_lock_.lock();
         gs_.swap(fresh);
         gait_sequencer_lock_.unlock();
+        loaded_gs_type_ = this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string();
         // `fresh` now holds the previous instance and is destroyed here, outside
         // the lock, so no control loop waits on the old stage's destructor.
       } catch (const std::runtime_error &error) {
@@ -480,6 +498,7 @@ MITController::MITController(const std::string &nodeName)
   // The order is the construction order of the code this replaces, and every
   // stage gets its own StageInit (each takes ownership of a model/state clone).
   gs_ = gs_loader_.Load(stage_selection::kGaitSequencerTypeKey, MakeStageInit());
+  loaded_gs_type_ = this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string();
   mpc_ = mpc_loader_.Load(stage_selection::kMPCTypeKey, MakeStageInit());
   gs_->UpdateTarget(target_);
   // The model adaptation stage is always loaded, exactly as it was always
