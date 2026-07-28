@@ -248,6 +248,21 @@ through an export-only include path, so the header staying self-contained for an
 consumer is checked by the ordinary `colcon build`, along with the non-copyable/non-movable shape and
 the error-type distinction.
 
+Since M4.2 (#17) a third guard exists, and it is the one that tests the *claim* rather than the
+mechanics. This document has promised since M2.2 that an out-of-package plugin "is found as soon as
+it calls `pluginlib_export_plugin_description_file(controllers …)` — no allowlist here needs
+touching" (`stage_loader.hpp`, `kStagePluginPackage`). Until #17 that was reasoning, not a test: every
+plugin loaded through production discovery lived in this package. `ws/src/examples/example_stage_plugins`
+now ships one that does not, and its suite constructs `StageLoader<SwingLegControllerInterface>`
+exactly as the host does — same package, same base, ament discovery, no explicit XML — and asserts
+its class is declared and loads. The promise is now executable.
+
+That test lives in the example package rather than here on purpose: the assertion belongs to whoever
+ships the plugin. The corresponding change on this side is that `controllers`' own declared-class
+assertions moved from equality to containment, because the exact set for a base is now a property of
+the workspace rather than of this package — see [`plugin_discovery.md`](plugin_discovery.md) §4 for
+the full reasoning and for what stayed exact.
+
 ```bash
 colcon build --packages-select controllers --cmake-args -DROBOT_NAME=go2
 colcon test  --packages-select controllers --ctest-args -R test_stage_loader
@@ -267,4 +282,4 @@ colcon test-result --verbose
 | #12 | [M3.1] Extract contact FSM | **Done.** Uses `StageLoader<ContactLogicInterface>` unchanged; added `contact_logic.type` |
 | #13 | [M3.2] Runtime WBC / command-type profile | **Done.** Collapsed the two WBC bases into one; `stage_plugin_bases::kWBC` is now `StagePlugin<WBCInterface>` and `kWBCCartesian` is gone. A breaking change for any out-of-tree WBC plugin XML, which must restate the new base |
 | #16 | [M4.1] Bio gait sequencer via plugin param | **Done.** Added `bio_gait` to the gait base's declared classes; reachable only through `gs.type`, with no legacy value bridged onto it (§4) |
-| #17 | [M4.2] Example passthrough / logging plugin | Loaded by the same path, from outside this package (§5) |
+| #17 | [M4.2] Example passthrough / logging plugin | **Done.** Loaded by the same path, from outside this package (§5); turns the "no allowlist needs touching" promise into a test (§7) |
