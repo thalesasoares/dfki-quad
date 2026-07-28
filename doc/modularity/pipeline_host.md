@@ -192,6 +192,15 @@ moved and #15 (M3.4) reworks (the model update broadcast), which is where the lo
 decided once. They should be a change of their own, on top of this one. M3.1 did not change the
 lock discipline either: the contact stage runs under `wbc_lock_`, where the FSM already ran.
 
+**Update after M3.4 (issue #15).** The broadcast rework has landed, and the place this paragraph
+asked for now exists: the model fan-out's lock choices are five `Register` lines in the constructor
+([`model_update_broadcast.md`](model_update_broadcast.md) §4), so G6's `gs_->UpdateModel` half is a
+one-argument edit — `mpc_lock_` → `gait_sequencer_lock_` — rather than surgery inside
+`ModelAdaptationCallback`. M3.4 deliberately did **not** make that edit, for the same reason M2.4
+and M3.1 did not: it preserved the existing grouping exactly so the refactor stays reviewable as
+behaviour-preserving. Both gaps remain open, and the rest of G6 — the unlocked `quad_model_`
+mutation — and all of G10 are still in the loop bodies.
+
 ## 9. Related issues
 
 | Issue | Title | Relationship |

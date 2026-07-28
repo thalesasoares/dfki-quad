@@ -138,6 +138,22 @@ if (BUILD_TESTING)
     target_compile_options(test_default_contact_logic PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
     # ##########################################################################
+    # --- Model update broadcast test (issue #15, M3.4) --- #
+    # ##########################################################################
+    # The behavioural pin for the model-adaptation fan-out: registration order,
+    # the per-group lock discipline it reproduces, and the capture-by-slot rule
+    # the runtime gait sequencer reload depends on. The helper is header-only
+    # and host-internal, so there is no algorithm source to link — only
+    # potato_model.cpp, for the ModelInterface the broadcast passes through.
+    ament_add_gtest(test_model_update_broadcast
+            test/test_model_update_broadcast.cpp
+            src/potato_sim/potato_model.cpp)
+    target_include_directories(test_model_update_broadcast PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_model_update_broadcast common interfaces rclcpp Eigen3)
+    target_compile_options(test_model_update_broadcast PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+    # ##########################################################################
     # --- Plugin discovery smoke test (issue #6, M2.1) --- #
     # ##########################################################################
     # Verifies the six plugin description files are exported for pluginlib

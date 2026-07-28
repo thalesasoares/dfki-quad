@@ -32,6 +32,7 @@
 #include "mit_controller/swing_leg_controller_interface.hpp"
 #include "mit_controller/wbc_interface.hpp"
 #include "model_adaptation/model_adaptation_interface.hpp"
+#include "model_update_broadcast.hpp"
 #include "stage_selection.hpp"
 
 /**
@@ -167,6 +168,15 @@ class MITController : public rclcpp::Node {
   std::mutex mpc_lock_;
   std::mutex slc_lock_;  // TODO: instead of this locks, maybe schedule the change to the repsective callback group
   std::mutex wbc_lock_;
+
+  // Who gets the new model when the model adaptation changes it (issue #15,
+  // M3.4). Filled once at bring-up — one `Register` line per stage, naming the
+  // lock that stage's `UpdateModel` runs under — and read by
+  // `ModelAdaptationCallback`, which is now a single `Broadcast` call instead of
+  // a hardcoded list of five. **Declared after the stage pointers and the locks
+  // on purpose**: its entries reference both, so being destroyed before them is
+  // the same hygiene the loader/stage-pointer ordering above documents.
+  ModelUpdateBroadcast model_update_broadcast_;
 
   // For multithreading
   rclcpp::CallbackGroup::SharedPtr mpc_call_back_group_;

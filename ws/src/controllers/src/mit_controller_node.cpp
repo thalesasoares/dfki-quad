@@ -560,6 +560,30 @@ MITController::MITController(const std::string &nodeName)
               this->get_parameter(stage_selection::kModelAdaptationTypeKey).as_string().c_str(),
               this->get_parameter(stage_selection::kContactLogicTypeKey).as_string().c_str());
 
+  // Who receives the model when the model adaptation changes it (issue #15,
+  // M3.4). This block *is* the fan-out that used to be written out by hand in
+  // ModelAdaptationCallback; registration order and lock grouping reproduce it
+  // exactly — MPC and GS under mpc_lock_, WBC and the contact stage under
+  // wbc_lock_, SLC under slc_lock_, in that order, and the names are the ones
+  // the three log lines there already printed.
+  //
+  // GS is registered under mpc_lock_ rather than gait_sequencer_lock_ because
+  // that is where it ran before, not because it belongs there: that is gap G6
+  // (stage_contracts.md §7), which pipeline_host.md §8 keeps as a change of its
+  // own so that this one stays reviewable as "same behaviour, different owner
+  // of the list". Fixing it is now editing one argument on one line, here,
+  // instead of surgery inside a callback.
+  //
+  // The model adaptation itself is the producer and is deliberately absent — it
+  // is handed the model by DoModelAdaptation. Adding a stage to the pipeline
+  // means adding one line here and nothing else; see
+  // doc/modularity/model_update_broadcast.md.
+  model_update_broadcast_.Register("MPC", mpc_lock_, mpc_);
+  model_update_broadcast_.Register("GS", mpc_lock_, gs_);
+  model_update_broadcast_.Register("WBC", wbc_lock_, wbc_);
+  model_update_broadcast_.Register("contact logic", wbc_lock_, contact_logic_);
+  model_update_broadcast_.Register("SLC", slc_lock_, slc_);
+
   // Now change modus of le driver acording to this controller
   // comment next paragraph if you want to use controller on bag data
   auto req = std::make_shared<interfaces::srv::ChangeLegDriverMode::Request>();
@@ -867,22 +891,12 @@ void MITController::ModelAdaptationCallback() {
     if (changed_model) {
       RCLCPP_INFO(this->get_logger(), "Model Adaptation changed QuadModel");
       interfaces::msg::QuadModel quad_model_msg;
-      mpc_lock_.lock();
-      mpc_->UpdateModel(quad_model_);
-      gs_->UpdateModel(quad_model_);
-      mpc_lock_.unlock();
-      RCLCPP_INFO(this->get_logger(), "Updated used Model in MPC and GS");
-      wbc_lock_.lock();
-      wbc_->UpdateModel(quad_model_);
-      // The contact stage computes its hold positions from the model too, and
-      // runs under this same lock.
-      contact_logic_->UpdateModel(quad_model_);
-      wbc_lock_.unlock();
-      RCLCPP_INFO(this->get_logger(), "Updated used Model in WBC and contact logic");
-      slc_lock_.lock();
-      slc_->UpdateModel(quad_model_);
-      slc_lock_.unlock();
-      RCLCPP_INFO(this->get_logger(), "Updated used Model in SLC");
+      // The five UpdateModel calls, three lock/unlock pairs and three log lines
+      // that stood here are now the registration block in the constructor
+      // (issue #15, M3.4): same stages, same order, same locks, same log text —
+      // the difference is that a sixth stage no longer has to be threaded into
+      // this callback by hand.
+      model_update_broadcast_.Broadcast(quad_model_, this->get_logger());
       quad_model_msg.header.stamp = this->get_clock()->now();
       quad_model_msg.mass = quad_model_.GetMass();
       Eigen::Map<Eigen::Vector3d>(quad_model_msg.com.data()) = quad_model_.GetBodyToCOM().vector();
