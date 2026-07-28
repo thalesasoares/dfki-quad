@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>example_stage_plugins</name>
+  <version>0.0.0</version>
+  <description>
+    Worked examples of out-of-package control-pipeline stage plugins (M4.2, issue #17).
+    Demonstration code only — not production locomotion. See README.md.
+  </description>
+  <maintainer email="thalesasoares02@gmail.com">Thales Soares</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!--
+    `controllers` is the only pipeline dependency listed, deliberately: it
+    ament_export_dependencies(common Eigen3 rclcpp interfaces pluginlib), so a
+    consumer inherits everything the exported stage interface headers need
+    without re-listing it (doc/modularity/plugin_discovery.md §1). pluginlib is
+    named as well because this package calls its macros directly
+    (PLUGINLIB_EXPORT_CLASS, pluginlib_export_plugin_description_file), and a
+    package should depend explicitly on what it uses by name.
+  -->
+  <depend>controllers</depend>
+  <depend>pluginlib</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
