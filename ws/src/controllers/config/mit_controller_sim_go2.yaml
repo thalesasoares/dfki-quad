@@ -10,7 +10,7 @@ mit_controller_node: ##### SIMULATION
     # runtime (`ros2 param set`, joystick Y) — the host then rebuilds the gait
     # sequencer off-loop and swaps it in.
     gs:
-      type: simple_gait # gait sequencer: simple_gait | adaptive_gait
+      type: simple_gait # gait sequencer: simple_gait | adaptive_gait | bio_gait
     mpc:
       type: acados_mpc # model predictive controller: acados_mpc
     slc:

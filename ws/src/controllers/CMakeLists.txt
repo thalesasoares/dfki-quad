@@ -414,9 +414,6 @@ endif ()
 # down to the plugin section with the sources they belong to: the frozen stage
 # *interfaces* the host talks to are plain virtual classes over Eigen types.
 #
-# bio_gait_sequencer.cpp is intentionally not here: it has no plugin wrapper until
-# #16 (M4.1) and is compiled by the `mitcontroller` harness and — for the
-# WITHOUT_DRAKE lane, which skips that harness — by gait_sequencer_plugins.
 add_executable(mitcontrollernode
         src/mit_controller_node.cpp
 )
@@ -486,12 +483,10 @@ set(stock_plugin_common_includes
 # the build; every other warning remains a hard error.
 set(stock_plugin_compile_options -Wall -Wextra -Wpedantic -Werror -Wno-error=maybe-uninitialized)
 
-# bio_gait_sequencer.cpp has no wrapper class yet — #16 (M4.1) adds one — but it is
-# built here so that it still gets compiled at all: M2.4 dropped it from
-# mitcontrollernode along with the other algorithms, and the only other target that
-# compiled it (`mitcontroller`) is skipped in the WITHOUT_DRAKE / onboard lane. It
-# shares every dependency of the two sequencers below, so this costs one TU and
-# keeps the file from silently rotting until #16 wraps it.
+# bio_gait_sequencer.cpp has been built here since M2.4 so that it kept getting
+# compiled at all, ahead of having a wrapper. #16 (M4.1) added that wrapper
+# (`bio_gait`), so it is now here for the same reason as every other source in this
+# list: it is the algorithm behind a plugin this library exports.
 add_library(gait_sequencer_plugins SHARED
         src/plugins/gait_sequencer_plugins.cpp
         src/mit_controller/simple_gait_sequencer.cpp

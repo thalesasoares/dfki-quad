@@ -302,7 +302,7 @@ TEST(StageLoader, BaseClassStringsMatchThePluginSchema) {
 // added. This is test_plugin_discovery.cpp's assertion re-run through the API the
 // host will actually use, so if StageLoader ever stops pointing at the same
 // package/resource as a bare ClassLoader, it fails here. The contact stage joined
-// the list in M3.1 (#12).
+// the list in M3.1 (#12), and `bio_gait` in M4.1 (#16).
 template <class StageInterface>
 void ExpectProductionLoaderDeclares(const char* base_class_type, std::vector<std::string> expected) {
   StageLoader<StageInterface> loader(base_class_type);
@@ -314,7 +314,7 @@ void ExpectProductionLoaderDeclares(const char* base_class_type, std::vector<std
 
 TEST(StageLoader, ProductionLoadersDeclareStockPluginsForEveryStageBase) {
   ExpectProductionLoaderDeclares<GaitSequencerInterface>(stage_plugin_bases::kGaitSequencer,
-                                                         {"simple_gait", "adaptive_gait"});
+                                                         {"simple_gait", "adaptive_gait", "bio_gait"});
   ExpectProductionLoaderDeclares<MPCInterface>(stage_plugin_bases::kMPC, {"acados_mpc"});
   ExpectProductionLoaderDeclares<SwingLegControllerInterface>(stage_plugin_bases::kSwingLegController,
                                                              {"bezier_swing"});

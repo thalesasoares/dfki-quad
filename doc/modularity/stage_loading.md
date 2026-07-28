@@ -130,7 +130,12 @@ configuration stays one vocabulary.
 In the shipped configs, `mit_controller_{sim,real}_go2.yaml` carry all six keys explicitly as of
 M2.5 and M3.1; the ULab configs still select through the host's declared defaults.
 
-This supersedes the legacy `gait_sequencer` parameter (`"Simple"` / `"Adaptive"` / `"Bio"`).
+This supersedes the legacy `gait_sequencer` parameter (`"Simple"` / `"Adaptive"` — an earlier
+revision of this section listed `"Bio"` as a third accepted value, which was never true: the host
+factory had no such branch, which is exactly why `BioGaitSequencer` was unreachable from
+configuration until #16 (M4.1) exported it as `bio_gait`. Because there is no legacy behaviour to
+preserve, `bio_gait` is reachable **only** through `gs.type`, and `GaitSequencerTypeFromLegacy` was
+deliberately left without a `"Bio"` mapping rather than growing a shim #23 removes).
 M2.2 does not touch it. M2.4 kept it alive as the *default* of `gs.type` so that YAMLs written
 before M2.5 still select the same sequencer, and M2.5 moved the last runtime caller
 (`scripts/joy_to_target.py`, which switches sequencers from the joystick) onto `gs.type` — so no
@@ -261,4 +266,5 @@ colcon test-result --verbose
 | #10 | [M2.5] YAML schema for stage selection | Ratified the `<stage>.type` convention unchanged and wrote it into the Go2 configs (§4) |
 | #12 | [M3.1] Extract contact FSM | **Done.** Uses `StageLoader<ContactLogicInterface>` unchanged; added `contact_logic.type` |
 | #13 | [M3.2] Runtime WBC / command-type profile | **Done.** Collapsed the two WBC bases into one; `stage_plugin_bases::kWBC` is now `StagePlugin<WBCInterface>` and `kWBCCartesian` is gone. A breaking change for any out-of-tree WBC plugin XML, which must restate the new base |
+| #16 | [M4.1] Bio gait sequencer via plugin param | **Done.** Added `bio_gait` to the gait base's declared classes; reachable only through `gs.type`, with no legacy value bridged onto it (§4) |
 | #17 | [M4.2] Example passthrough / logging plugin | Loaded by the same path, from outside this package (§5) |

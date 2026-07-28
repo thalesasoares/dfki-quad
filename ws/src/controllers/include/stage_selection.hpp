@@ -82,6 +82,10 @@ inline constexpr char kLegacyLateContactRescheduleSwingPhaseKey[] = "late_contac
 /** Stock plugin class names, as declared in the `plugins/` XMLs (M2.3, issue #8). */
 inline constexpr char kSimpleGaitPlugin[] = "simple_gait";
 inline constexpr char kAdaptiveGaitPlugin[] = "adaptive_gait";
+// Added by M4.1 (#16), and deliberately absent from GaitSequencerTypeFromLegacy
+// below: the pre-plugin factory had no "Bio" branch, so there is no legacy
+// spelling to bridge and none is invented for a shim #23 (M5.4) deletes.
+inline constexpr char kBioGaitPlugin[] = "bio_gait";
 inline constexpr char kAcadosMPCPlugin[] = "acados_mpc";
 inline constexpr char kBezierSwingPlugin[] = "bezier_swing";
 inline constexpr char kWbcArcOptPlugin[] = "wbc_arc_opt";

@@ -102,7 +102,7 @@ void ExpectDeclaresClasses(const std::string& base_class_type, std::vector<std::
 
 TEST(PluginDiscovery, ClassLoaderDeclaresStockPluginsForEachStageBase) {
   ExpectDeclaresClasses<StagePlugin<GaitSequencerInterface>>(
-      "StagePlugin<GaitSequencerInterface>", {"simple_gait", "adaptive_gait"});
+      "StagePlugin<GaitSequencerInterface>", {"simple_gait", "adaptive_gait", "bio_gait"});
   ExpectDeclaresClasses<StagePlugin<MPCInterface>>("StagePlugin<MPCInterface>", {"acados_mpc"});
   ExpectDeclaresClasses<StagePlugin<SwingLegControllerInterface>>(
       "StagePlugin<SwingLegControllerInterface>", {"bezier_swing"});
