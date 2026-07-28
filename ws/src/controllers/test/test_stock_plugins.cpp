@@ -120,6 +120,34 @@ TEST(StockPlugins, AdaptiveGaitLoadsInitialisesAndRuns) {
   EXPECT_EQ(plugin->GetType(), GS_Type::ADAPTIVE);
 }
 
+// bio_gait joined the stock set in M4.1 (#16). It is a "light" stage like the two
+// above — no solver, no URDF — so it gets the same load + Init + one-cycle
+// treatment. Note it needs no keys of its own: BaseParams() already carries the
+// shared gait-sequencer keys, which is the point of the wrapper reading exactly
+// those (stock_plugins.md §2).
+TEST(StockPlugins, BioGaitLoadsInitialisesAndRuns) {
+  StageLoader<GaitSequencerInterface> loader(stage_plugin_bases::kGaitSequencer);
+  auto plugin = loader.Load(kTypeKey, MakeInit("bio_gait", BaseParams()));
+  ASSERT_NE(plugin, nullptr);
+  plugin->UpdateTarget(Target{});
+  plugin->UpdateState(BrickState{});
+  GaitSequence sequence{};
+  plugin->GetGaitSequence(sequence);
+  EXPECT_EQ(plugin->GetType(), GS_Type::BIOINSPIRED);
+}
+
+// The bio sequencer exposes no runtime-tunable parameters — its gait is chosen
+// internally from the Froude number, not set from outside. Pinned because the
+// host's runtime parameter path depends on the false return to know a change did
+// not apply, and because it is what makes the joystick gait buttons documented
+// no-ops while bio is loaded.
+TEST(StockPlugins, BioGaitAcceptsNoRuntimeParameters) {
+  StageLoader<GaitSequencerInterface> loader(stage_plugin_bases::kGaitSequencer);
+  auto plugin = loader.Load(kTypeKey, MakeInit("bio_gait", BaseParams()));
+  ASSERT_NE(plugin, nullptr);
+  EXPECT_FALSE(plugin->SetParameter("raibert.k", rclcpp::ParameterValue(0.05)));
+}
+
 // acados_mpc: like wbc_arc_opt, a full Init sets up the acados solver, which
 // belongs to the sim regression (M2.6), not a fast unit test. Here we prove the
 // class is declared and its library dlopens and constructs (the runtime check
@@ -239,6 +267,16 @@ TEST(StockPlugins, SimpleGaitMissingRequiredKeyThrows) {
   ParamMap params = BaseParams();
   params.erase("gs_shoulder_positions");
   EXPECT_THROW(loader.Load(kTypeKey, MakeInit("simple_gait", params)), StageInitError);
+}
+
+// The shared gait-sequencer keys keep one strictness across all three wrappers:
+// gs_shoulder_positions is required by bio_gait too, and the miss is a named
+// StageInitError rather than a default-shaped robot.
+TEST(StockPlugins, BioGaitMissingRequiredKeyThrows) {
+  StageLoader<GaitSequencerInterface> loader(stage_plugin_bases::kGaitSequencer);
+  ParamMap params = BaseParams();
+  params.erase("gs_shoulder_positions");
+  EXPECT_THROW(loader.Load(kTypeKey, MakeInit("bio_gait", params)), StageInitError);
 }
 
 TEST(StockPlugins, SimpleGaitUnknownGaitStringThrows) {
