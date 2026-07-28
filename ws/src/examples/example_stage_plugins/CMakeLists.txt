@@ -109,4 +109,32 @@ pluginlib_export_plugin_description_file(controllers plugins/example_slc_plugins
 
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
+# ##############################################################################
+# --- Tests --- #
+# ##############################################################################
+if (BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+
+    # The ament resource that carries this package's plugin description lives in
+    # the install space, so the test process needs CMAKE_INSTALL_PREFIX on
+    # AMENT_PREFIX_PATH — the same arrangement the controllers plugin tests use
+    # (doc/modularity/plugin_discovery.md §4). Under `colcon test` the package is
+    # already installed, so the resource is present.
+    ament_add_gtest(test_passthrough_slc_plugin
+            test/test_passthrough_slc_plugin.cpp
+            APPEND_ENV AMENT_PREFIX_PATH=${CMAKE_INSTALL_PREFIX})
+    # Same include-only treatment as the library above, and for the same reason:
+    # the test drives the plugin entirely through `controllers`' pure-virtual
+    # interfaces plus its header-only StageLoader, so it needs no compiled symbol
+    # from `controllers` either.
+    target_include_directories(test_passthrough_slc_plugin SYSTEM PRIVATE ${controllers_INCLUDE_DIRS})
+    ament_target_dependencies(test_passthrough_slc_plugin pluginlib rclcpp)
+    target_link_libraries(test_passthrough_slc_plugin Eigen3::Eigen)
+    target_compile_options(test_passthrough_slc_plugin PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+    # The test loads the plugin through production discovery, so the library it
+    # dlopens must be built before the test runs.
+    add_dependencies(test_passthrough_slc_plugin example_slc_plugins)
+endif ()
+
 ament_package()
