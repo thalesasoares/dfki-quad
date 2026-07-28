@@ -1,6 +1,7 @@
 # Stock Stage Plugins
 
-**Status:** implemented in M2.3 (issue #8); `default_contact_logic` added in M3.1 (issue #12). ·
+**Status:** implemented in M2.3 (issue #8); `default_contact_logic` added in M3.1 (issue #12);
+`bio_gait` added in M4.1 (issue #16). ·
 **Applies to:** `ws/src/controllers` ·
 **Companion documents:** [`plugin_lifecycle.md`](plugin_lifecycle.md) — the wrapper contract (§4) ·
 [`plugin_discovery.md`](plugin_discovery.md) — the description XML schema ·
@@ -21,6 +22,7 @@ behaviour change** (issue #8 acceptance criterion 3). Each plugin is a thin adap
 |---|---|---|---|---|
 | `simple_gait` | `SimpleGaitSequencerPlugin` | `SimpleGaitSequencer` | `libgait_sequencer_plugins` | `kGaitSequencer` |
 | `adaptive_gait` | `AdaptiveGaitSequencerPlugin` | `AdaptiveGaitSequencer` | `libgait_sequencer_plugins` | `kGaitSequencer` |
+| `bio_gait` | `BioGaitSequencerPlugin` | `BioGaitSequencer` | `libgait_sequencer_plugins` | `kGaitSequencer` |
 | `acados_mpc` | `AcadosMpcPlugin` | `MPC` | `libmpc_plugins` | `kMPC` |
 | `bezier_swing` | `BezierSwingPlugin` | `SwingLegController` | `libslc_plugins` | `kSwingLegController` |
 | `wbc_arc_opt` | `WbcArcOptPlugin` | `WBCArcOPT` | `libwbc_plugins` | `kWBC` |
@@ -35,8 +37,16 @@ reconciliation FSM lifted out of `MITController::ControlLoopCallback`, so its `I
 factory to mirror — see §2 — and its "no behaviour change" claim rests on
 `test/test_default_contact_logic.cpp` rather than on the wrapper being a pure forwarder.
 
-`bio_gait` (`BioInspiredGait`) is deliberately **not** exported here — issue #8 defers it to M4.1
-(#16). The `name=` values are the suggested stock ids; the selection-key vocabulary belongs to M2.5
+`bio_gait` joined in M4.1 (#16), and is the other entry with no host factory behind it — for the
+opposite reason to `default_contact_logic`. `BioGaitSequencer` predates the plugin boundary and is
+unchanged by #16, but the pre-plugin `GetGaitSequencerFromParams` had no `"Bio"` branch: the class
+was compiled and never constructed, so no configuration could reach it. Exporting it is therefore
+the first time this repository *adds* a stage implementation through the plugin path alone — one XML
+entry, one wrapper, one `gs.type` value, and no host edit — which is what M4 exists to prove.
+Correspondingly it has no "no behaviour change" claim to make (there was no reachable behaviour);
+what it has is `test/test_stock_plugins.cpp` and the Go2 sim smoke recorded on #16.
+
+The `name=` values are the suggested stock ids; the selection-key vocabulary belongs to M2.5
 (#10), so these are naming-agnostic.
 
 Both WBCs declare the one base `kWBC` (`StagePlugin<WBCInterface>`) in `wbc_plugins.xml` and live in
@@ -60,12 +70,23 @@ branch the host used to pick with a parameter is now the plugin selection:
 | `wbc_arc_opt` / `inverse_dynamics` | the `create_wbc` lambda's two branches | `USE_WBC` (compile-time) |
 | `kf_adaptation` / `rls_adaptation` | the `ma_mode` `switch`, default / case 1 | `ma_mode` |
 | `default_contact_logic` | — see below | — |
+| `bio_gait` | — see below | — |
 
 `default_contact_logic` is the exception to the paragraph above, because M3.1 (#12) is an extraction,
 not a repackaging: there was no host *factory* to relocate, only host *code*. The two switch
 statements of `ControlLoopCallback` became `DefaultContactLogic::Reconcile`, and the four detection
 toggles the host read into its own members became the stage's `Init` parameters. Its `Init` is
 therefore four `Require<bool>` calls and nothing else.
+
+`bio_gait` (M4.1, #16) is the second exception, and the only `Init` in the table that is genuinely
+new code: `GetGaitSequencerFromParams` had no `"Bio"` branch to relocate. It is nevertheless written
+as `SimpleGaitSequencerPlugin::Init` minus the `Gait` construction, because the keys it reads are the
+*shared* gait-sequencer ones (§3) and those must keep one spelling and one required-vs-defaulted
+split across all three wrappers — a `bio_gait` that quietly defaulted `fix_standing_position` while
+its neighbours required it would be a trap. The one thing it does not do is read a gait: the
+sequencer selects from `BioGaitDatabase` by Froude number internally, so it adds no
+`bio_gait_sequencer.*` namespace. The `gs_shoulder_positions` read + length check that all three now
+share moved into a `RequireShoulderPositions` helper when this third caller arrived.
 
 ## 3. Parameters per stage
 
@@ -75,7 +96,11 @@ stage*. These defaults mirror the host's pre-M2.3 `declare_parameter` defaults e
 the audit surface for that, and the seed for M2.5 (#10, YAML schema) and M5.2 (#21, parameter
 reference).
 
-### `simple_gait` / `adaptive_gait`
+### `simple_gait` / `adaptive_gait` / `bio_gait`
+
+The first nine keys are shared by all three; the `*_gait_sequencer.*` blocks below them belong to one
+sequencer each. `bio_gait` (M4.1, #16) reads **only** the shared nine — it has no block of its own,
+because it picks its gait internally by Froude number.
 
 | Key | Req? | Default | Notes |
 |---|---|---|---|
@@ -200,20 +225,26 @@ performance:
 - **The algorithm sources live only here** — M2.3 compiled them both into these libraries and into
   `mitcontrollernode`; M2.4 (#9) made the host a thin loader and dropped them from the node, so these
   libraries are now the only place the algorithms are built
-  ([`pipeline_host.md`](pipeline_host.md) §1). `bio_gait_sequencer.cpp` is compiled here too — it has
-  no wrapper until #16 (M4.1), but the target that used to compile it is skipped in the
-  `WITHOUT_DRAKE` lane.
+  ([`pipeline_host.md`](pipeline_host.md) §1). `bio_gait_sequencer.cpp` was already compiled here
+  ahead of having a wrapper, so that M2.4 dropping it from the node would not leave it uncompiled in
+  the `WITHOUT_DRAKE` lane; since #16 (M4.1) it is here for the ordinary reason — it is the algorithm
+  behind an exported plugin. **This is why #16 changed no build files:** the translation unit, its
+  flags and the link line were already in place, so exporting `bio_gait` cost one wrapper class in an
+  existing TU and one XML entry.
 
 ## 5. What guards it
 
 `test/test_stock_plugins.cpp` loads every stock plugin through production ament discovery. The light
-stages (`simple_gait`, `adaptive_gait`, `bezier_swing`, `inverse_dynamics`, `kf_adaptation`,
-`rls_adaptation`) are fully `Init`ed and driven one interface cycle. `acados_mpc` and `wbc_arc_opt`
+stages (`simple_gait`, `adaptive_gait`, `bio_gait`, `bezier_swing`, `inverse_dynamics`,
+`kf_adaptation`, `rls_adaptation`) are fully `Init`ed and driven one interface cycle. `acados_mpc` and `wbc_arc_opt`
 are load-only here — a full `Init` sets up the acados / ARC-OPT solver (and `wbc_arc_opt` needs a real
 URDF), which belongs to the M2.6 (#11) sim regression, not a fast unit test; their libraries dlopening
 and constructing is still the runtime proof that the link story resolves, and their wrapper-specific
 logic (the MPC solver-name mapping) is covered by the fail-fast tests. The suite also pins the
-fail-fast errors (missing required key, unknown gait/solver name, unknown selection).
+fail-fast errors (missing required key, unknown gait/solver name, unknown selection). `bio_gait` adds
+one assertion the others do not need: `SetParameter` returns `false` for any key, pinning "no
+runtime-tunable parameters" as a tested contract rather than a header comment — the host relies on
+that return value to know a runtime parameter change did not apply.
 `default_contact_logic` is light too: it needs no solver and no URDF, so the suite `Init`s it and runs
 a full `Reconcile` cycle through the frozen interface, and pins its missing-required-key error. Its
 *behaviour* is covered separately and far more thoroughly by `test/test_default_contact_logic.cpp`

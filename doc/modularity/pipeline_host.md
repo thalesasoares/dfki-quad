@@ -213,5 +213,5 @@ mutation — and all of G10 are still in the loop bodies.
 | #11 | [M2.6] Go2 sim regression | Acceptance gate for the pipeline this host builds |
 | #12 | [M3.1] Extract contact FSM | **Done.** Moved the contact reconciliation out of `ControlLoopCallback` into the `default_contact_logic` stage (§1) |
 | #13 | [M3.2] Runtime WBC / command-type profile | **Done.** Deleted `WBCType` / `WBC_PLUGIN_BASE`, collapsed the two WBC bases (§2), and added the bring-up `wbc.type` / `leg_control_mode` compatibility check |
-| #16 | [M4.1] Bio gait sequencer via plugin param | Becomes a `gs.type` value; no host change needed |
+| #16 | [M4.1] Bio gait sequencer via plugin param | **Done, and the prediction held: this file was not touched.** `bio_gait` is a `gs.type` value like any other — bring-up load and the runtime rebuild-and-swap are class-name-generic, so adding a stage implementation needed no host edit |
 | #23 | [M5.4] Deprecate monolithic factory paths | Removes the legacy `*.type` derivation (§2) |
