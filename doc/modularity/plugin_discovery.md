@@ -133,7 +133,9 @@ does not: `example_passthrough_slc`, in `ws/src/examples/example_stage_plugins`
 ([its README](../../ws/src/examples/example_stage_plugins/README.md) is the contributor-facing
 version of this section). It is the first exercise of the promise
 [`stage_loading.md`](stage_loading.md) has carried since M2.2 — that a third party joins the
-pipeline without an allowlist — and it establishes the pattern #18 (M4.3) will generalise.
+pipeline without an allowlist — and it establishes the pattern #18 (M4.3) generalised into
+[`adding_a_stage.md`](adding_a_stage.md), the step-by-step guide for adding a stage from your own
+package. What follows here is the *mechanism*; that document is the procedure.
 
 The mechanism is the *same single line*, with the same first argument:
 
@@ -242,3 +244,4 @@ Release flags, and the only per-cycle addition is the stock wrapper's forwarding
 | #12 | [M3.1] Extract contact FSM | **Done.** Populated `contact_logic_plugins.xml` with `default_contact_logic` |
 | #13 | [M3.2] Runtime WBC / command-type profile | **Done.** Collapsed `wbc_plugins.xml` onto the single `StagePlugin<WBCInterface>` base |
 | #17 | [M4.2] Example passthrough / logging plugin | **Done.** First out-of-package plugin — §3a; moved the declared-class assertions to containment — §4 |
+| #18 | [M4.3] Contributor guide: add a control stage | **Done.** Turns §3a into a procedure — [`adding_a_stage.md`](adding_a_stage.md) §4 |

@@ -283,3 +283,4 @@ colcon test-result --verbose
 | #13 | [M3.2] Runtime WBC / command-type profile | **Done.** Collapsed the two WBC bases into one; `stage_plugin_bases::kWBC` is now `StagePlugin<WBCInterface>` and `kWBCCartesian` is gone. A breaking change for any out-of-tree WBC plugin XML, which must restate the new base |
 | #16 | [M4.1] Bio gait sequencer via plugin param | **Done.** Added `bio_gait` to the gait base's declared classes; reachable only through `gs.type`, with no legacy value bridged onto it (§4) |
 | #17 | [M4.2] Example passthrough / logging plugin | **Done.** Loaded by the same path, from outside this package (§5); turns the "no allowlist needs touching" promise into a test (§7) |
+| #18 | [M4.3] Contributor guide: add a control stage | **Done.** [`adding_a_stage.md`](adding_a_stage.md) §5 documents the `<stage>.type` selection and the fail-fast message of §1 from the contributor's side |
