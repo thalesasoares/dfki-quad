@@ -1,0 +1,35 @@
+# Swap the swing leg controller for the out-of-package example (issue #19, M4.4).
+#
+#   ros2 launch controllers mit_controller.launch.py sim:=go2 \
+#       stage_overlay:=go2_example_passthrough_slc.yaml
+#
+# >>> THE ROBOT WILL NOT WALK WITH THIS OVERLAY LOADED. <<<
+# `example_passthrough_slc` holds every foot where it already is, so the quad
+# stands and a walk command is a documented no-op, not a bug. It is a worked
+# example and a diagnostic probe — with the swing stage contributing no motion,
+# the throttled log below reports what the gait sequencer is actually scheduling.
+# Do not use it to move a real robot. See
+# ws/src/examples/example_stage_plugins/README.md §1.
+#
+# Requires that package to be built; it ships from `examples/`, not from
+# `controllers`, and nothing in `controllers` knows it exists:
+#
+#   colcon build --packages-up-to example_stage_plugins
+#
+# That is the point of shipping this overlay. The `<stage>.type` value crosses a
+# package boundary with no host edit and no allowlist — the same one string
+# selects a stock stage or somebody else's (plugin_discovery.md §3a) — and this
+# file is the only place in `controllers` where an out-of-package plugin is
+# named at all.
+#
+# It is also why this overlay is a file rather than an `slc:=` argument: the
+# plugin's own `log_period` is a parameter, not a selection, so type and tuning
+# have to travel together. Set to 0.0 to silence the logging.
+#
+# See doc/modularity/stage_overlays.md.
+mit_controller_node:
+  ros__parameters:
+    slc:
+      type: example_passthrough_slc
+    example_passthrough_slc:
+      log_period: 1.0
