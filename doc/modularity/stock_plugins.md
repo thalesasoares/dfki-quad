@@ -49,6 +49,16 @@ what it has is `test/test_stock_plugins.cpp` and the Go2 sim smoke recorded on #
 The `name=` values are the suggested stock ids; the selection-key vocabulary belongs to M2.5
 (#10), so these are naming-agnostic.
 
+**This table is the *stock* set, and it stays that way.** From M4.2 (#17) the workspace also contains
+plugins that are selectable at `<stage>.type` but are deliberately **not** stock: `example_passthrough_slc`,
+in `ws/src/examples/example_stage_plugins`. The distinction is not bookkeeping. Everything in the
+table above ships inside `controllers`, is a production control implementation, and is a defensible
+choice for a robot that has to walk. An example plugin is demonstration or diagnostic code — the
+passthrough SLC makes the robot *stand* — and lives in its own package precisely so that "what can I
+select?" and "what should I select?" do not collapse into one list. Example plugins are documented by
+their own package's README ([example_stage_plugins](../../ws/src/examples/example_stage_plugins/README.md)),
+and for the same reason they are not added to the `type:` comment lists in the Go2 config YAMLs.
+
 Both WBCs declare the one base `kWBC` (`StagePlugin<WBCInterface>`) in `wbc_plugins.xml` and live in
 the one `libwbc_plugins`. Until M3.2 they could not: the interface was a class template (gap G8), so
 the joint-command path (`kWBC`) and the ULab/ikin Cartesian path (`kWBCCartesian`) were two unrelated
@@ -217,7 +227,12 @@ performance:
 - **`common` is include-only, never linked** — linking it would drag the non-PIC `libfmt.a` closure
   into a shared object ([`stage_loading.md`](stage_loading.md) §6). The algorithm code uses only
   `common`'s abstract interfaces and header-only helpers, so it references no compiled `common`
-  symbol. `libwbc_plugins` links `fmt::fmt-header-only` for the same reason.
+  symbol. `libwbc_plugins` links `fmt::fmt-header-only` for the same reason. M4.2 (#17) found the
+  out-of-package form of this rule: a plugin in another package must consume **`controllers`** as an
+  include path too, because `ament_target_dependencies(<target> controllers)` puts the whole
+  re-exported `common` → `quad_model` → `drake` closure on the link line and fails to configure. Same
+  underlying fact in both cases — a stage plugin references no compiled symbol of either package, only
+  pure-virtual interfaces and plain data — see [`plugin_discovery.md`](plugin_discovery.md) §3a.
 - **Same optimisation as the node** — the libraries inherit the directory-scope `-Ofast` (x86) /
   `-O3` (aarch64), so control-loop code is optimised identically. A `-fPIC`-only Eigen
   `-Wmaybe-uninitialized` false positive (which the non-PIC node never hits) is demoted to non-fatal

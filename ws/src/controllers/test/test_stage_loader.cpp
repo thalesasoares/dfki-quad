@@ -298,18 +298,26 @@ TEST(StageLoader, BaseClassStringsMatchThePluginSchema) {
 }
 
 // The production loaders — built through ament index discovery, no explicit XML —
-// construct for every stage base and declare exactly the stock IDs M2.3 (#8)
-// added. This is test_plugin_discovery.cpp's assertion re-run through the API the
-// host will actually use, so if StageLoader ever stops pointing at the same
+// construct for every stage base and declare the stock IDs M2.3 (#8) added. This
+// is test_plugin_discovery.cpp's assertion re-run through the API the host will
+// actually use, so if StageLoader ever stops pointing at the same
 // package/resource as a bare ClassLoader, it fails here. The contact stage joined
 // the list in M3.1 (#12), and `bio_gait` in M4.1 (#16).
+//
+// Containment, not equality, since M4.2 (#17): out-of-package packages may now
+// declare stages of their own against these same bases, so the exact set depends
+// on what else is installed rather than on this package being correct. See the
+// header comment of test_plugin_discovery.cpp for the full rationale; the two
+// assertions moved together on purpose, because they are the same statement made
+// through two different APIs.
 template <class StageInterface>
-void ExpectProductionLoaderDeclares(const char* base_class_type, std::vector<std::string> expected) {
+void ExpectProductionLoaderDeclares(const char* base_class_type, const std::vector<std::string>& expected) {
   StageLoader<StageInterface> loader(base_class_type);
-  std::vector<std::string> declared = loader.DeclaredClasses();
-  std::sort(declared.begin(), declared.end());
-  std::sort(expected.begin(), expected.end());
-  EXPECT_EQ(declared, expected) << "unexpected declared classes for base " << base_class_type;
+  const std::vector<std::string> declared = loader.DeclaredClasses();
+  for (const auto& stock_id : expected) {
+    EXPECT_NE(std::find(declared.begin(), declared.end(), stock_id), declared.end())
+        << "stock plugin '" << stock_id << "' is not declared for base " << base_class_type;
+  }
 }
 
 TEST(StageLoader, ProductionLoadersDeclareStockPluginsForEveryStageBase) {

@@ -11,10 +11,25 @@
 //      discovery" — it fails if a pluginlib_export_plugin_description_file() call is
 //      dropped or the file fails to install.
 //   2. A pluginlib::ClassLoader can be constructed for each active stage base class
-//      from the exported header + XML, and declares exactly the stock plugin IDs
-//      M2.3 (issue #8) added. contact_logic stays empty until M3.1 (#12). This
-//      flip from "zero declared" to "the stock IDs" is the intended signal that
-//      M2.3 landed.
+//      from the exported header + XML, and declares the stock plugin IDs M2.3
+//      (issue #8) added. contact_logic stays empty until M3.1 (#12). This flip
+//      from "zero declared" to "the stock IDs" is the intended signal that M2.3
+//      landed.
+//
+//      Point 2 asserted *exact* per-base class sets until M4.2 (#17). It cannot
+//      any more, and the reason is the milestone succeeding rather than a test
+//      being weakened: pluginlib resolves the `controllers__pluginlib__plugin`
+//      resource across every installed package, so from #17 onwards any package
+//      in the workspace may legitimately add a class to one of these bases
+//      without `controllers` knowing (that is precisely M4's exit criterion).
+//      An exact-set assertion here would therefore fail on a correct workspace,
+//      and — worse — would pass or fail depending on whether the *other* package
+//      happened to be built, which is environment, not correctness. What survives
+//      is the assertion that actually belongs to this package: every stock ID is
+//      present. Exactness is kept where it is still well defined — point 1 is
+//      scoped to package `controllers`, so it still pins an exact file list, and
+//      each out-of-package plugin asserts its own IDs in its own suite (see
+//      examples/example_stage_plugins/test/).
 //
 // Runtime note: the ament resource lives in the install space, so the CMake target
 // appends CMAKE_INSTALL_PREFIX to AMENT_PREFIX_PATH for this test (see
@@ -85,19 +100,26 @@ TEST(PluginDiscovery, ResourceListsAllDescriptionFiles) {
 }
 
 // A ClassLoader constructs for each active stage base from the exported header +
-// XML and declares exactly `expected_classes`. The constructor exercising the
+// XML and declares (at least) `expected_classes`. The constructor exercising the
 // full chain — header compiles for a consumer, XML parses, resource resolves — is
 // half the point; the declared-class set is the M2.3 signal.
+//
+// "At least" rather than "exactly" since M4.2 (#17) — see the header comment.
+// This still fails on everything it is here to catch: a stock plugin dropped from
+// its XML, a library that did not install, a base-class-type string that drifted
+// out of sync between the XML and the header. The one thing it no longer objects
+// to is another package adding a stage of its own, which is a feature.
 template <class Base>
-void ExpectDeclaresClasses(const std::string& base_class_type, std::vector<std::string> expected_classes) {
+void ExpectDeclaresClasses(const std::string& base_class_type, const std::vector<std::string>& expected_classes) {
   std::unique_ptr<pluginlib::ClassLoader<Base>> loader;
   ASSERT_NO_THROW(
       loader = std::make_unique<pluginlib::ClassLoader<Base>>("controllers", base_class_type))
       << "ClassLoader failed to construct for base " << base_class_type;
-  std::vector<std::string> declared = loader->getDeclaredClasses();
-  std::sort(declared.begin(), declared.end());
-  std::sort(expected_classes.begin(), expected_classes.end());
-  EXPECT_EQ(declared, expected_classes) << "unexpected declared classes for base " << base_class_type;
+  const std::vector<std::string> declared = loader->getDeclaredClasses();
+  for (const auto& expected : expected_classes) {
+    EXPECT_NE(std::find(declared.begin(), declared.end(), expected), declared.end())
+        << "stock plugin '" << expected << "' is not declared for base " << base_class_type;
+  }
 }
 
 TEST(PluginDiscovery, ClassLoaderDeclaresStockPluginsForEachStageBase) {
