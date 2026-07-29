@@ -339,14 +339,29 @@ Your stage is chosen by one string, the `<stage>.type` key from the [§1](#1-pic
 Nothing in `controllers` changes:
 
 ```bash
-ros2 run controllers mitcontrollernode --ros-args \
-    --params-file <your usual mit_controller_sim_go2.yaml> \
-    -p slc.type:=my_stage
+ros2 launch controllers mit_controller.launch.py sim:=go2 slc:=my_stage
 ```
 
-A first-class launch overlay for swapping a single stage is
-[#19](https://github.com/thalesasoares/dfki-quad/issues/19) (M4.4); until then a parameter override
-or a params file of your own that overlays the stock one is the mechanism.
+That argument exists for each of the six stages (M4.4, [#19](https://github.com/thalesasoares/dfki-quad/issues/19)).
+If your stage also needs *parameters* — and past the smallest example it will — put both in an
+overlay file instead, layered over the stock config without replacing it:
+
+```yaml
+# my_stage_overlay.yaml
+mit_controller_node:
+  ros__parameters:
+    slc:
+      type: my_stage
+    my_stage:
+      my_key: 1.0
+```
+
+```bash
+ros2 launch controllers mit_controller.launch.py sim:=go2 stage_overlay:=my_stage_overlay.yaml
+```
+
+Both are described in full, with the precedence between them, in
+[`stage_overlays.md`](stage_overlays.md).
 
 Misspell it and the pipeline **refuses to start**, naming what was available — there is no silent
 fallback to some other stage, which is the entire reason the loader exists:
@@ -457,7 +472,7 @@ and your `UpdateModel` must be cheap and must not assume it is ever called.
 | #18 | [M4.3] Contributor guide: add a control stage | **This document** |
 | #17 | [M4.2] Example passthrough / logging SLC plugin | The worked example this guide walks through |
 | #16 | [M4.1] Bio gait sequencer via plugin param | The in-package half of the same proof |
-| #19 | [M4.4] Launch overlay to swap one stage | Will replace the parameter override of §5 |
+| #19 | [M4.4] Launch overlay to swap one stage | Provides the launch argument and overlay file of §5 ([`stage_overlays.md`](stage_overlays.md)) |
 | #21 | [M5.2] Parameter reference for all stage keys | Owns the key-by-key reference §2 and §5 only contract |
 | #40 | Install the stage parameter helpers for out-of-package plugins | Would replace the hand-rolled reads of §2 |
 | #41 | Portable `<library path>` spelling in the stock XMLs | Would remove §4's footnote about the stock files |

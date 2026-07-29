@@ -48,14 +48,14 @@ than read.
 Nothing in `controllers` is edited. Override `slc.type` at launch:
 
 ```bash
-ros2 run controllers mitcontrollernode --ros-args \
-    --params-file <your usual mit_controller_sim_go2.yaml> \
-    -p slc.type:=example_passthrough_slc \
-    -p example_passthrough_slc.log_period:=1.0
+ros2 launch controllers mit_controller.launch.py sim:=go2 \
+    stage_overlay:=go2_example_passthrough_slc.yaml
 ```
 
-or set it in a params file of your own that overlays the stock one. (A first-class launch overlay for
-swapping a single stage is #19, M4.4; until then a parameter override is the mechanism.)
+That overlay ships with `controllers` (M4.4, #19) and sets both `slc.type` and this plugin's
+`log_period`; it is the reason a selection that also carries parameters needs a file rather than an
+`slc:=` argument. See [`stage_overlays.md`](../../../../doc/modularity/stage_overlays.md), and copy
+it as the starting point for an overlay of your own.
 
 Change the log cadence while it runs:
 
@@ -160,5 +160,5 @@ a stage in isolation.
 | #17 | [M4.2] Example passthrough / logging MPC or SLC plugin | **This package** |
 | #16 | [M4.1] Enable Bio gait sequencer via plugin param | Proved *in-package* stage addition; this proves the out-of-package half |
 | #18 | [M4.3] Contributor guide: add a control stage | **Done.** [`adding_a_stage.md`](../../../../doc/modularity/adding_a_stage.md) generalises §4 of this file into the step-by-step guide, and uses this package as its worked example |
-| #19 | [M4.4] Launch overlay to swap one stage | Will replace the parameter override of §3 with a first-class overlay |
+| #19 | [M4.4] Launch overlay to swap one stage | **Done.** Ships `go2_example_passthrough_slc.yaml`, the overlay §3 now uses |
 | #21 | [M5.2] Parameter reference for all stage keys | Consumes §2 |
