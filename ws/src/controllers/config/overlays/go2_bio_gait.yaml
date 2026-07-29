@@ -1,0 +1,25 @@
+# Swap the gait sequencer for the bio-inspired one (issue #19, M4.4).
+#
+#   ros2 launch controllers mit_controller.launch.py sim:=go2 \
+#       stage_overlay:=go2_bio_gait.yaml
+#
+# Layered over mit_controller_sim_go2.yaml / mit_controller_real_go2.yaml, which
+# keep supplying every other stage and all the tuning. Only the one value below
+# differs from the stock stack.
+#
+# `bio_gait` (M4.1, #16) reads only the nine gait-sequencer keys the stock Go2
+# configs already set — it picks its gait internally by Froude number, so it has
+# no parameter block of its own (stock_plugins.md §3). That makes this overlay a
+# single key, and it is therefore also expressible as the shorter
+#
+#   ros2 launch controllers mit_controller.launch.py sim:=go2 gs:=bio_gait
+#
+# Both are kept on purpose: the argument is the quickest way to try the swap, and
+# this file is the reproducible one to name in a demo script or a bug report. A
+# stage that did need its own parameters could only be selected this way.
+#
+# See doc/modularity/stage_overlays.md.
+mit_controller_node:
+  ros__parameters:
+    gs:
+      type: bio_gait

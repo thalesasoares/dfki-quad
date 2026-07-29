@@ -305,6 +305,26 @@ if (BUILD_TESTING)
     add_dependencies(test_go2_yaml_stage_selection
             gait_sequencer_plugins mpc_plugins slc_plugins wbc_plugins model_adaptation_plugins
             contact_logic_plugins)
+
+    # ##########################################################################
+    # --- Shipped stage overlay test (issue #19, M4.4) --- #
+    # ##########################################################################
+    # Same shape and same reasons as the suite above, applied to the overlays in
+    # config/overlays/: it reads them from the install prefix, checks each one
+    # actually selects a stage and stays smaller than the config it overlays, and
+    # resolves the selected classes against the declared plugins. The overlay
+    # naming an out-of-package class asserts that conditionally, so this target
+    # deliberately does *not* depend on example_stage_plugins — see the file's
+    # header comment.
+    ament_add_gtest(test_stage_overlays
+            test/test_stage_overlays.cpp
+            APPEND_ENV AMENT_PREFIX_PATH=${CMAKE_INSTALL_PREFIX})
+    target_include_directories(test_stage_overlays PRIVATE
+            include include/mit_controller test)
+    ament_target_dependencies(test_stage_overlays
+            pluginlib ament_index_cpp common interfaces rclcpp Eigen3)
+    target_compile_options(test_stage_overlays PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_dependencies(test_stage_overlays gait_sequencer_plugins slc_plugins)
 endif ()
 
 

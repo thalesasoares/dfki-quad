@@ -118,6 +118,10 @@ Rules: the key is **required** — absent, blank, non-string or unknown is a fat
 no stage is substituted. If a default is ever wanted it belongs in the shipped YAML, where it is
 visible, not inside the loader where it is not.
 
+Since M4.4 (#19) each of these keys is also reachable from the launch line, as `<stage>:=<plugin>` or
+through a `stage_overlay:=` params file layered over the robot config — the loader is unchanged and
+sees only the resulting parameter. See [`stage_overlays.md`](stage_overlays.md).
+
 **M2.5 (#10) owned this vocabulary and kept it as proposed**, so the names above are now the schema
 rather than a suggestion. It could have renamed them — `StageLoader` never hard-codes a key, `Load`
 takes it as an argument, and renaming `gs.type` costs a change in the host and the YAML and nothing
@@ -284,3 +288,4 @@ colcon test-result --verbose
 | #16 | [M4.1] Bio gait sequencer via plugin param | **Done.** Added `bio_gait` to the gait base's declared classes; reachable only through `gs.type`, with no legacy value bridged onto it (§4) |
 | #17 | [M4.2] Example passthrough / logging plugin | **Done.** Loaded by the same path, from outside this package (§5); turns the "no allowlist needs touching" promise into a test (§7) |
 | #18 | [M4.3] Contributor guide: add a control stage | **Done.** [`adding_a_stage.md`](adding_a_stage.md) §5 documents the `<stage>.type` selection and the fail-fast message of §1 from the contributor's side |
+| #19 | [M4.4] Launch overlay to swap one stage | **Done.** Makes the §4 keys settable at launch without editing the robot YAML; pure parameter plumbing, no loader change — [`stage_overlays.md`](stage_overlays.md) |
