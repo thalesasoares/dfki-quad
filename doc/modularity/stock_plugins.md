@@ -59,6 +59,10 @@ select?" and "what should I select?" do not collapse into one list. Example plug
 their own package's README ([example_stage_plugins](../../ws/src/examples/example_stage_plugins/README.md)),
 and for the same reason they are not added to the `type:` comment lists in the Go2 config YAMLs.
 
+**Adding a stage of your own** — in your package, not this one — is
+[`adding_a_stage.md`](adding_a_stage.md). The wrappers below are the right *code* template for it;
+their build wiring is not, because it depends on being inside this package.
+
 Both WBCs declare the one base `kWBC` (`StagePlugin<WBCInterface>`) in `wbc_plugins.xml` and live in
 the one `libwbc_plugins`. Until M3.2 they could not: the interface was a class template (gap G8), so
 the joint-command path (`kWBC`) and the ULab/ikin Cartesian path (`kWBCCartesian`) were two unrelated

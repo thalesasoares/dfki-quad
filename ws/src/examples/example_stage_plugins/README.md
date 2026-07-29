@@ -159,6 +159,6 @@ a stage in isolation.
 | #24 | [Meta] Modular Go2 control | Parent |
 | #17 | [M4.2] Example passthrough / logging MPC or SLC plugin | **This package** |
 | #16 | [M4.1] Enable Bio gait sequencer via plugin param | Proved *in-package* stage addition; this proves the out-of-package half |
-| #18 | [M4.3] Contributor guide: add a control stage | Will generalise §4 of this file into the guide |
+| #18 | [M4.3] Contributor guide: add a control stage | **Done.** [`adding_a_stage.md`](../../../../doc/modularity/adding_a_stage.md) generalises §4 of this file into the step-by-step guide, and uses this package as its worked example |
 | #19 | [M4.4] Launch overlay to swap one stage | Will replace the parameter override of §3 with a first-class overlay |
 | #21 | [M5.2] Parameter reference for all stage keys | Consumes §2 |

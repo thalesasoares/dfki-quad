@@ -45,6 +45,9 @@ Further, it is additionally supported with project funds from the federal state 
 Please use the [issue tracker](https://github.com/dfki-ric-underactuated-lab/dfki-quad/issues), to submit bug reports and feature requests.
 lease use merge requests as described [here](CONTRIBUTING.md) to add/adapt functionality.
 
+* Adding your own stage to the control pipeline (gait sequencer, MPC, swing leg controller, WBC, model adaptation or contact logic) needs **no change to the controller host**: see the step-by-step guide [Adding a Control Stage](doc/modularity/adding_a_stage.md).
+* The design documents behind that plugin architecture — the frozen stage contracts, the plugin lifecycle, discovery and loading — are in [doc/modularity/](doc/modularity/).
+
 
 ## Requirements / Dependencies
 * The requirements are all external and will be **automatically installed** when using the docker image, a full list can be found under [DEPENDENCIES](DEPENDENCIES.md).
@@ -497,6 +500,7 @@ which will advance the simulation by the amount of seconds specified in the requ
     ros2 launch controllers mit_controller.launch.py sim:=go2
     ```
 * This command will start the safe launch, which waits for a state message (coming from the simulation or state estimation) and makes sure that the state estimation is not drifting
+* The controller is a **modular pipeline**: each stage (gait sequencer, MPC, swing leg controller, WBC, model adaptation, contact logic) is a `pluginlib` plugin selected by a `<stage>.type` parameter in the controller config, so a stage can be swapped without rebuilding the host. To write and select your own, follow [Adding a Control Stage](doc/modularity/adding_a_stage.md).
 ---
 <details>
   <summary> <b> Note on Code Formatters </b> </summary>

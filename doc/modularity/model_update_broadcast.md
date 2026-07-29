@@ -174,4 +174,4 @@ because `std::mutex::try_lock` from the thread that already owns the mutex is un
 | #12 | [M3.1] Extract contact FSM into `ContactLogic` plugin | Added the fifth entry by hand — the last time that was necessary |
 | #15 | [M3.4] Model update broadcast helper | **This document** |
 | #17 | [M4.2] Example passthrough / logging plugin | Consumes §3 — one `Register` line |
-| #18 | [M4.3] Contributor guide: add a control stage | Links §3 as the model-update step |
+| #18 | [M4.3] Contributor guide: add a control stage | **Done.** [`adding_a_stage.md`](adding_a_stage.md) §6 links §3 as the model-update step a new stage must honour |
