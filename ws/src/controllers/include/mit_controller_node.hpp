@@ -1,5 +1,6 @@
 #pragma once
 
+#include <rcl_interfaces/srv/list_parameters.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
 
@@ -21,22 +22,36 @@
 #include "interfaces/msg/wbc_return.hpp"
 #include "interfaces/msg/wbc_target.hpp"
 #include "interfaces/srv/change_leg_driver_mode.hpp"
-#include "mit_controller/adaptive_gait_sequencer.hpp"
+#include "mit_controller/contact_logic_interface.hpp"
 #include "mit_controller/gait_sequence_to_msg.hpp"
 #include "mit_controller/gait_sequencer_interface.hpp"
-#include "mit_controller/inverse_dynamics.hpp"
 #include "mit_controller/mit_controller_params.hpp"
-#include "mit_controller/mpc.hpp"
 #include "mit_controller/mpc_interface.hpp"
-#include "mit_controller/simple_gait_sequencer.hpp"
-#include "mit_controller/swing_leg_controller.hpp"
+#include "mit_controller/stage_loader.hpp"
+#include "mit_controller/stage_plugin.hpp"
 #include "mit_controller/swing_leg_controller_interface.hpp"
-#include "mit_controller/wbc_arc_opt.hpp"
 #include "mit_controller/wbc_interface.hpp"
-#include "model_adaptation/kf_model_adaptation.hpp"
-#include "model_adaptation/least_squares_model_adaptation.hpp"
 #include "model_adaptation/model_adaptation_interface.hpp"
+#include "model_update_broadcast.hpp"
+#include "stage_selection.hpp"
 
+/**
+ * The pipeline host (issue #9, M2.4).
+ *
+ * The node owns everything that is *not* an algorithm: the ROS interface
+ * (subscriptions, publishers, the leg driver service), the three control loops
+ * with their timers and mutually exclusive callback groups, the locks that
+ * separate them, and the lifetime of the six pipeline stages.
+ *
+ * It constructs **no** concrete algorithm. Every stage arrives through
+ * `StageLoader` (`mit_controller/stage_loader.hpp`), selected by a `*.type`
+ * parameter (`stage_selection.hpp`) and initialised through the two-phase plugin
+ * lifecycle of `doc/modularity/plugin_lifecycle.md`. What the host does with a
+ * stage afterwards is unchanged: it calls the frozen interfaces of
+ * `doc/modularity/stage_contracts.md`, because `StagePlugin<I>` *is* an `I`.
+ *
+ * See doc/modularity/pipeline_host.md.
+ */
 class MITController : public rclcpp::Node {
  public:
   enum LEGControlMode {
@@ -47,8 +62,6 @@ class MITController : public rclcpp::Node {
   };
 
  private:
-  enum LegStatus { SWING, STANCE, EARLY_CONTACT, LATE_CONTACT, LOST_CONTACT };
-
   // Parameters:
   LEGControlMode leg_control_mode_;
   Eigen::Vector3d cartesian_joint_control_swing_Kp_;
@@ -63,13 +76,7 @@ class MITController : public rclcpp::Node {
   Eigen::Vector3d joint_control_swing_Kd_;
   Eigen::Vector3d joint_control_stance_Kp_;
   Eigen::Vector3d joint_control_stance_Kd_;
-  bool early_contact_detection_;
-  bool late_contact_detection_;
-  bool lost_contact_detection_;
-  bool late_contact_reschedule_swing_phase_;
   bool use_model_adaptation_;
-  Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1> state_weights_stand_;
-  Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1> state_weights_move_;
 
   // ROS related members
   rclcpp::Subscription<interfaces::msg::QuadState>::SharedPtr quad_state_subscription_;
@@ -105,16 +112,45 @@ class MITController : public rclcpp::Node {
   std::shared_ptr<rclcpp::ParameterEventCallbackHandle> parameter_event_callback_handle_;
 
   // Controller related members
-  // std::shared_ptr<MPCInterface> mpc_;
-  std::unique_ptr<MPCInterface> mpc_;
-  std::unique_ptr<GaitSequencerInterface> gs_;
-  std::unique_ptr<SwingLegControllerInterface> slc_;
-  typedef std::conditional<USE_WBC,
-                           WBCInterface<JointTorqueVelocityPositionCommands>,
-                           WBCInterface<CartesianCommands>>::type WBCType;
-  std::unique_ptr<WBCType> wbc_;
-  // std::shared_ptr<ModelAdaptationInterface> ma_;
-  std::unique_ptr<ModelAdaptationInterface> ma_;
+  //
+  // Since #13 (M3.2) the WBC is an ordinary stage: `WBCInterface` is no longer a
+  // class template, so there is one pluginlib base for every WBC and the command
+  // family is a runtime property of the loaded plugin (`SupportedCommandMode`).
+  // Which of the two getters the control loop calls follows `leg_control_mode_`,
+  // validated against the loaded plugin once at bring-up.
+
+  // One loader per stage base class. **Declared before the stage pointers on
+  // purpose**: members are destroyed in reverse declaration order, and
+  // destroying a pluginlib::ClassLoader unloads the library — a stage instance
+  // outliving its loader would be a dangling vtable (stage_loader.hpp,
+  // plugin_lifecycle.md §5). The loaders are also non-movable, so this
+  // relationship cannot be broken by accident later.
+  StageLoader<GaitSequencerInterface> gs_loader_{stage_plugin_bases::kGaitSequencer};
+  StageLoader<MPCInterface> mpc_loader_{stage_plugin_bases::kMPC};
+  StageLoader<SwingLegControllerInterface> slc_loader_{stage_plugin_bases::kSwingLegController};
+  StageLoader<WBCInterface> wbc_loader_{stage_plugin_bases::kWBC};
+  StageLoader<ModelAdaptationInterface> ma_loader_{stage_plugin_bases::kModelAdaptation};
+  StageLoader<ContactLogicInterface> contact_logic_loader_{stage_plugin_bases::kContactLogic};
+
+  // The stages themselves. `PluginPtr` carries pluginlib's own deleter, which is
+  // part of the pointer type — moving one into a plain std::unique_ptr would
+  // silently substitute the default deleter and destroy the stage outside
+  // pluginlib's bookkeeping. Every *use* below is still the frozen stage
+  // interface, because StagePlugin<I> derives from I.
+  StageLoader<MPCInterface>::PluginPtr mpc_;
+  StageLoader<GaitSequencerInterface>::PluginPtr gs_;
+  // The gs.type value gs_ was actually loaded from — lets the parameter event
+  // callback tell a real sequencer switch apart from the echo of its own
+  // legacy-key re-derivation (see the gs.type branch there).
+  std::string loaded_gs_type_;
+  StageLoader<SwingLegControllerInterface>::PluginPtr slc_;
+  StageLoader<WBCInterface>::PluginPtr wbc_;
+  StageLoader<ModelAdaptationInterface>::PluginPtr ma_;
+  // The contact reconciliation stage (issue #12, M3.1). It runs inside the
+  // control loop under wbc_lock_, between the swing leg controller's output and
+  // the WBC's input, and owns the per-leg FSM state that used to sit in the four
+  // arrays below this line.
+  StageLoader<ContactLogicInterface>::PluginPtr contact_logic_;
   Target target_;
   GaitSequence gait_sequence_;
   bool gs_updated_;
@@ -123,11 +159,6 @@ class MITController : public rclcpp::Node {
   FeetTargets feet_targets_;
   std::array<double, ModelInterface::N_LEGS> feet_swing_progress_;
   std::array<SwingLegControllerInterface::LegState, ModelInterface::N_LEGS> feet_swing_states_;
-  GaitSequence::Mode last_gait_sequence_mode_;
-  std::array<Eigen::Vector3d, ModelInterface::N_LEGS> last_feet_pos_targets_;
-  std::array<LegStatus, ModelInterface::N_LEGS> feet_status_;
-  std::array<Eigen::Vector3d, ModelInterface::N_LEGS> early_contact_hold_position_;
-  std::array<Eigen::Vector3d, ModelInterface::N_LEGS> slip_hold_in_body_;
 
   // For sync
   std::mutex quad_state_lock_;
@@ -137,6 +168,15 @@ class MITController : public rclcpp::Node {
   std::mutex mpc_lock_;
   std::mutex slc_lock_;  // TODO: instead of this locks, maybe schedule the change to the repsective callback group
   std::mutex wbc_lock_;
+
+  // Who gets the new model when the model adaptation changes it (issue #15,
+  // M3.4). Filled once at bring-up — one `Register` line per stage, naming the
+  // lock that stage's `UpdateModel` runs under — and read by
+  // `ModelAdaptationCallback`, which is now a single `Broadcast` call instead of
+  // a hardcoded list of five. **Declared after the stage pointers and the locks
+  // on purpose**: its entries reference both, so being destroyed before them is
+  // the same hygiene the loader/stage-pointer ordering above documents.
+  ModelUpdateBroadcast model_update_broadcast_;
 
   // For multithreading
   rclcpp::CallbackGroup::SharedPtr mpc_call_back_group_;
@@ -149,8 +189,32 @@ class MITController : public rclcpp::Node {
   QuadState quad_state_;
   QuadModelPino quad_model_;
 
-  std::unique_ptr<GaitSequencerInterface> GetGaitSequencerFromParams(std::unique_ptr<ModelInterface> model,
-                                                                     std::unique_ptr<StateInterface> state) const;
+  /**
+   * The initialisation context handed to a stage's `Init`: a model and state
+   * clone plus the node's full parameter set as a flat name -> value map
+   * (plugin_lifecycle.md §3). Every stage receives the same map and reads the
+   * keys it documents; defaults for absent keys live in the stage.
+   *
+   * Only ever called at bring-up or from the reconfiguration path, never from a
+   * control loop — building it walks the parameter map, and the stages it feeds
+   * do the work the deleted constructors did.
+   */
+  StageInit MakeStageInit();
+
+  /**
+   * Refuses a `wbc.type` / `leg_control_mode` pairing the pipeline cannot serve
+   * (issue #13, M3.2). Called once, right after the WBC is loaded.
+   *
+   * `leg_control_mode` picks the command topic the host publishes on; the WBC
+   * plugin decides which command family it can produce. Until M3.2 the two could
+   * not disagree without recompiling, because the command type was a build
+   * flavour. Now both are launch-time choices, so the check is the host's — done
+   * here rather than per cycle, which is also why the control loop's dispatch has
+   * no mismatch branch left.
+   *
+   * @throws StageLoadError naming both parameters and the fix
+   */
+  void ValidateWBCCommandMode();
 
  public:
   MITController(const std::string& nodeName);

@@ -45,4 +45,6 @@ class SwingLegController : public SwingLegControllerInterface {
   void SetSwingHeight(double swing_height);
   void SetWorldBlend(double world_blend);
   void SetMaximumSwingProgressToUpdateTarget(double maximum_swing_leg_progress_to_update_target);
+
+  bool SetParameter(const std::string &name, const rclcpp::ParameterValue &value) override;
 };

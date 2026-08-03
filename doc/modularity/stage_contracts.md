@@ -1,6 +1,13 @@
 # Control Pipeline Stage Contracts
 
-**Status:** frozen as of M1.1 (issue #1) · **Applies to:** `ws/src/controllers`
+**Status:** frozen as of M1.1 (issue #1); host→concrete casts removed in M1.2 (issue #2); shared
+data types exported in M1.3 (issue #3); `ContactLogicInterface` specified in M1.4 (issue #4, §4.6 —
+header stub, not yet wired) ·
+**Applies to:** `ws/src/controllers` ·
+**Companion documents:** [`pipeline_types.md`](pipeline_types.md) — the data the methods below
+exchange, and the include path plugins compile against ·
+[`plugin_lifecycle.md`](plugin_lifecycle.md) — how a stage is created and initialised once loaded
+via pluginlib (specified ahead of M2.2)
 
 This document is the reference contract for the five control-pipeline stages that
 `mit_controller_node` hosts. It records, for each stage, the methods an implementation **must**
@@ -11,9 +18,11 @@ about threading and locking.
 
 The controllers package is being refactored from a monolithic node into a pluginlib-based pipeline
 host (meta issue #24). Loading a stage as a plugin is only possible if the host talks to it purely
-through an abstract interface. Today it does not: the host reaches through the interfaces into
-concrete algorithm classes in 18 places. This document freezes what the contracts are now, states
-where the host violates them, and proposes the API changes that follow-up issues will implement.
+through an abstract interface. When M1.1 froze these contracts the host reached through the
+interfaces into concrete algorithm classes in 18 places; M1.2 (issue #2) removed all of them for
+stage access via the `SetParameter` hook (§6), leaving only the follow-up items still owned by #9
+and #13 (§5, now closed). This document freezes what the contracts are, states where the host still deviates,
+and records the API changes made.
 
 Rules going forward:
 
@@ -30,8 +39,14 @@ Rules going forward:
 | Gait sequencing | `mit_controller/gait_sequencer_interface.hpp` | `SimpleGaitSequencer`, `AdaptiveGaitSequencer`, `BioGaitSequencer` |
 | Force optimisation | `mit_controller/mpc_interface.hpp` | `MPC` (acados QP) |
 | Swing trajectories | `mit_controller/swing_leg_controller_interface.hpp` | `SwingLegController` |
-| Whole-body control | `mit_controller/wbc_interface.hpp` | `WBCArcOPT` (Go2), `InverseDynamics` (ULab) |
+| Whole-body control | `mit_controller/wbc_interface.hpp` | `WBCArcOPT` (joint commands), `InverseDynamics` (Cartesian commands) |
 | Model adaptation | `model_adaptation/model_adaptation_interface.hpp` | `KFModelAdaptation`, `LeastSquaresModelAdaptation` |
+
+A **sixth stage** — contact reconciliation — has its contract specified in §4.6
+(`mit_controller/contact_logic_interface.hpp`, issue #4). It was kept out of this table while it had
+no implementation and no host wiring. Issue #12 (M3.1) added `DefaultContactLogic`, moved the host's
+inline FSM behind the interface and wired the host to it, so the sixth row is now
+`ContactLogicInterface` / `DefaultContactLogic`; the table is left as the M1 record.
 
 ```mermaid
 flowchart LR
@@ -40,18 +55,27 @@ flowchart LR
     GS["GaitSequencer<br/>100 Hz"] -->|GaitSequence| MPC["MPC<br/>100 Hz"]
     GS -->|GaitSequence| SLC["SwingLegController<br/>500 Hz"]
     GS -->|GaitSequence| MA
-    MPC -->|WrenchSequence<br/>MPCPrediction| WBC["WBC<br/>500 Hz"]
-    SLC -->|FeetTargets| WBC
-    WBC -->|JointCommandType| OUT["/leg_cmd<br/>/leg_joint_cmd"]
-    MA["ModelAdaptation<br/>100 Hz"] -.->|ModelInterface| GS & MPC & SLC & WBC
+    GS -->|GaitSequence| CL
+    MPC -->|MPCPrediction| WBC["WBC<br/>500 Hz"]
+    MPC -->|WrenchSequence| CL
+    SLC -->|FeetTargets| CL
+    S --> CL
+    CL["ContactLogic<br/>500 Hz<br/>(§4.6, M3.1)"] ==>|reconciled FootContact,<br/>Wrenches, FeetTargets| WBC
+    WBC -->|joint or cartesian commands| OUT["/leg_cmd<br/>/leg_joint_cmd"]
+    MA["ModelAdaptation<br/>100 Hz"] -.->|ModelInterface| GS & MPC & SLC & WBC & CL
 ```
 
 Solid arrows are per-cycle data flow. The dashed arrow is the model-update broadcast, which is
-event-driven rather than periodic (§4.5).
+event-driven rather than periodic (§4.5). The **thick arrow** out of `ContactLogic` marks the sixth
+stage, which is *specified* (§4.6) but **not yet wired**: today its logic runs inline in
+`ControlLoopCallback` between the SLC/MPC outputs and the WBC. Extracting it behind
+`ContactLogicInterface` was issue #12 (M3.1), now done.
 
 ## 3. Timing and threading
 
-All periods are `static constexpr` in `mit_controller/mit_controller_params.hpp`. `main()` runs a
+All periods are `static constexpr` in `mit_controller/pipeline_constants.hpp` (moved there from
+`mit_controller_params.hpp` in M1.3 so plugins can see them; the latter still includes the former,
+so in-package code is unaffected). `main()` runs a
 `rclcpp::executors::MultiThreadedExecutor` with **4 threads**; each loop below owns a **mutually
 exclusive callback group**, so a given stage is never re-entered concurrently, but different stages
 do run concurrently on different threads.
@@ -67,7 +91,8 @@ do run concurrently on different threads.
 Other shared constants a stage implementation may rely on: `N_LEGS = 4`,
 `N_JOINTS_PER_LEG = 3`, `GAIT_SEQUENCE_SIZE = 100`, `MPC_PREDICTION_HORIZON = 10`,
 `MPC_DT = 50 ms`. The gait sequence therefore spans 100 × 50 ms = 5 s of plan, and the MPC horizon
-covers 10 × 50 ms = 500 ms.
+covers 10 × 50 ms = 500 ms. The full table is in
+[`pipeline_types.md`](pipeline_types.md) §3.
 
 ### Start-up ordering
 
@@ -82,6 +107,10 @@ timers are created lazily inside the first `MPCLoopCallback`**
    they must tolerate a default-constructed `QuadState` on their first cycles.
 3. Constructors receive `std::unique_ptr<ModelInterface>` and `std::unique_ptr<StateInterface>`
    clones and take ownership of them. Every stage therefore needs a working destructor — see G4.
+   Under the plugin host (M2) this constructor injection becomes two-phase: the loader
+   default-constructs the plugin and the host passes the same clones (and the parameters) through
+   `StagePlugin::Init` — see [`plugin_lifecycle.md`](plugin_lifecycle.md). The guarantee is
+   unchanged: the clones are valid when the stage receives them.
 
 ### General call-order rule
 
@@ -104,6 +133,7 @@ Header: `ws/src/controllers/include/mit_controller/gait_sequencer_interface.hpp`
 | `void GetGaitSequence(GaitSequence&)` | out | `MPCLoopCallback` (`:817`) | 100 Hz |
 | `void GetGaitState(interfaces::msg::GaitState&)` | out | `MPCLoopCallback` (`:959`), diagnostics only | 100 Hz |
 | `GS_Type GetType() const` | out | — (currently unused by the host) | — |
+| `bool SetParameter(const std::string&, const rclcpp::ParameterValue&)` | in | parameter-event callback, under `gait_sequencer_lock_` | on `ros2 param set` |
 
 **Data.** In: `Target` (`mit_controller/target.hpp`) — world/hybrid-frame pose and twist setpoints,
 each with an `active` flag. Out: `GaitSequence` (`mit_controller/gait_sequence.hpp`) — a
@@ -119,8 +149,11 @@ the same callback for publishing.
 `mpc_lock_` instead (G6). Implementations must be safe against `GetGaitSequence` blocking the 100 Hz
 loop; no internal blocking beyond the loop period.
 
-**Notes.** `sequence_mode` transitions drive the MPC weight switch in the host (G1). The
-`GetGaitState` output is diagnostic (`/gait_state`), gated on `PUBLISH_GAIT_STATE`.
+**Notes.** `sequence_mode` transitions drive the MPC weight switch, which as of issue #2 lives
+inside `MPC::UpdateGaitSequence` rather than the host (see G1). The `GetGaitState` output is
+diagnostic (`/gait_state`), gated on `PUBLISH_GAIT_STATE`. `SetParameter` handles the
+`adaptive_gait_sequencer.gait.*` keys for `AdaptiveGaitSequencer`; other sequencers return `false`
+and the host reloads the sequencer from scratch (the previous fallback).
 
 ### 4.2 `MPCInterface`
 
@@ -132,13 +165,16 @@ Header: `ws/src/controllers/include/mit_controller/mpc_interface.hpp`
 | `void UpdateModel(const ModelInterface&)` | in | `ModelAdaptationCallback` (`:1013`) | event-driven |
 | `void UpdateGaitSequence(const GaitSequence&)` | in | `MPCLoopCallback` (`:818`) | 100 Hz |
 | `void GetWrenchSequence(WrenchSequence&, MPCPrediction&, SolverInformation&)` | out | `MPCLoopCallback` (`:844`) | 100 Hz |
+| `bool SetParameter(const std::string&, const rclcpp::ParameterValue&)` | in | parameter-event callback, under `mpc_lock_` | on `ros2 param set` |
 
 **Data.** Out: `WrenchSequence` — `MPC_PREDICTION_HORIZON × N_LEGS` ground-reaction forces;
 `MPCPrediction` — predicted pose/twist over `MPC_PREDICTION_HORIZON + 1` knots plus the raw 13-state
 vector; `SolverInformation` (defined in the same header) — `success`, `return_code`,
 `total_solver_time` and acados/QP diagnostics.
 
-**Call order.** `UpdateState` and `UpdateGaitSequence` → `GetWrenchSequence`.
+**Call order.** `UpdateState` and `UpdateGaitSequence` → `GetWrenchSequence`. `UpdateGaitSequence`
+also applies the `KEEP`↔`MOVE` cost-weight switch internally, driven by the sequence's
+`sequence_mode` (moved out of the host in issue #2, G1).
 
 **Threading.** `mpc_lock_` held for the whole sequence. **`GetWrenchSequence` is permitted to
 block** — the host annotates the call `// This one might block` and warns when
@@ -147,8 +183,10 @@ the contract. `success == false` is reported by the host as an error but the pip
 using whatever was written into `wrench_sequence`, so an implementation must always leave both
 output arguments in a usable state.
 
-**Missing from the contract.** Runtime tuning — `SetStateWeights`, `SetInputWeights`, `SetFmax`,
-`SetMu` — is used by the host but lives only on `MPC`. See G1 and §6.
+**Runtime tuning.** As of issue #2, the host pushes `mpc_state_weights_stand`, `mpc_state_weights_move`,
+`mpc_alpha`, `mpc_fmax` and `mpc_mu` through `SetParameter`, which dispatches to the concrete
+`SetStateWeights` / `SetInputWeights` / `SetFmax` / `SetMu` internally. The host no longer casts to
+`MPC` (was G1; see §6).
 
 ### 4.3 `SwingLegControllerInterface`
 
@@ -162,6 +200,7 @@ Header: `ws/src/controllers/include/mit_controller/swing_leg_controller_interfac
 | `void GetFeetTargets(FeetTargets&)` | out | `SLCLoopCallback` (`:1360`) | 500 Hz |
 | `void GetProgress(std::array<double, N_LEGS>&, std::array<LegState, N_LEGS>&)` | out | `SLCLoopCallback` (`:1361`) | 500 Hz |
 | `void GetCurrentTrajs(std::array<Eigen::Vector3d, N_LEGS>&, std::array<Eigen::Vector3d, N_LEGS>&)` | out | `ControlLoopCallback` (`:1301`), diagnostics only | 500 Hz |
+| `bool SetParameter(const std::string&, const rclcpp::ParameterValue&)` | in | parameter-event callback, under `slc_lock_` | on `ros2 param set` |
 
 **Data.** Out: `FeetTargets` (`mit_controller/feet_targets.hpp`) — per-leg position, velocity and
 acceleration. `LegState` is declared on the interface itself:
@@ -177,10 +216,12 @@ from the 100 Hz MPC loop at `:816` — under `mpc_lock_`, **not** `slc_lock_` (G
 `GetCurrentTrajs` is called from the control loop with no SLC lock at all (G10). An implementation
 must not assume single-threaded access today, even though the contract intends it.
 
-**Missing from the contract.** `SetSwingHeight`, `SetWorldBlend`,
-`SetMaximumSwingProgressToUpdateTarget` — see G2.
+**Runtime tuning.** As of issue #2, `slc_swing_height`, `slc_world_blend` and
+`maximum_swing_leg_progress_to_update_target` are applied through `SetParameter`, which dispatches to
+`SetSwingHeight` / `SetWorldBlend` / `SetMaximumSwingProgressToUpdateTarget` internally. The host no
+longer casts to `SwingLegController` (was G2).
 
-### 4.4 `WBCInterface<JointCommandType>`
+### 4.4 `WBCInterface`
 
 Header: `ws/src/controllers/include/mit_controller/wbc_interface.hpp`
 
@@ -192,19 +233,33 @@ Header: `ws/src/controllers/include/mit_controller/wbc_interface.hpp`
 | `void UpdateFeetTarget(const FeetTargets&)` | in | `ControlLoopCallback` (`:1246`) | 500 Hz |
 | `void UpdateFootContact(const FootContact&)` | in | `ControlLoopCallback` (`:1247`) | 500 Hz |
 | `void UpdateWrenches(const Wrenches&)` | in | `ControlLoopCallback` (`:1248`) | 500 Hz |
-| `WBCReturn GetJointCommand(JointCommandType&)` | out | `ControlLoopCallback` (`:1257` / `:1269`) | 500 Hz |
+| `WBCCommandMode SupportedCommandMode() const` | out | host bring-up, once | — |
+| `WBCReturn GetJointCommand(JointTorqueVelocityPositionCommands&)` | out | `ControlLoopCallback` | 500 Hz |
+| `WBCReturn GetCartesianCommand(CartesianCommands&)` | out | `ControlLoopCallback` | 500 Hz |
+| `bool SetParameter(const std::string&, const rclcpp::ParameterValue&)` | in | parameter-event callback, under `wbc_lock_` | on `ros2 param set` |
 
-**Type members.** `JOINT_COMMAND_TYPE`, `Wrenches = std::array<Eigen::Vector3d, N_LEGS>`,
+**Type members.** `Wrenches = std::array<Eigen::Vector3d, N_LEGS>`,
 `FootContact = std::array<bool, N_LEGS>`. `WBCReturn` (same header) carries `success`,
 `qp_update_time`, `qp_solve_time`.
 
-**Command types** (`mit_controller/joint_commands.hpp`): `CartesianCommands` (per-leg position,
+**Command families** (`mit_controller/joint_commands.hpp`): `CartesianCommands` (per-leg position,
 velocity, force → `/leg_cmd`) or `JointTorqueVelocityPositionCommands` (per-joint → `/leg_joint_cmd`).
-Which one is used is fixed **at compile time** by `USE_WBC`, itself set from `ROBOT_MODEL`
-(`GO2` → `WBCArcOPT` with joint commands, `ULAB` → `InverseDynamics` with Cartesian commands).
+Until M3.2 the choice was fixed **at compile time**: `WBCInterface` was a class template keyed on the
+command struct, and `USE_WBC` (from `ROBOT_MODEL`) picked the instantiation, so `GO2` could only
+build `WBCArcOPT` with joint commands and `ULAB` only `InverseDynamics` with Cartesian commands
+(gap G8). Issue #13 (M3.2) made it a **runtime** property: one interface declares both getters, every
+implementation reports which family it actually produces through `SupportedCommandMode()`, and the
+one it does not produce returns `{false, 0, 0}` without touching its out-parameter.
+
+Exactly one getter is on the hot path per pipeline, chosen by `leg_control_mode`. The host pairs the
+two once at bring-up — `ValidateWBCCommandMode` compares `SupportedCommandMode()` against
+`stage_selection::WBCCommandModeForLegControlMode(leg_control_mode)` and throws `StageLoadError`
+naming both parameters on a mismatch — so the control loop reaches only the compatible getter and
+carries no mismatch branch. The off-mode stub is therefore defence in depth, not a code path.
 
 **Call order.** `UpdateState` → `UpdateTarget` → `UpdateFeetTarget` → `UpdateFootContact` →
-`UpdateWrenches` → `GetJointCommand`. All six inputs are refreshed every cycle before the solve.
+`UpdateWrenches` → the getter for the pipeline's command family. All six inputs are refreshed every
+cycle before the solve.
 
 **Important:** the target passed to `UpdateTarget` is **`mpc_prediction.orientation[1]` /
 `position[1]`** — the MPC's prediction one step ahead — not the raw gait-sequence target. The
@@ -214,9 +269,13 @@ commented-out alternative at `:1070` shows the gait-sequence variant that is *no
 `Update*` calls and the solve. Unlike the MPC, the host does **not** warn when the WBC overruns its
 2 ms budget — the check exists but is commented out at `:1292-1297`.
 
-**Missing from the contract.** The `InverseDynamics` tuning setters (`setFootPositionBasedOnTargetHeight`,
-`setFootPositionBasedOnTargetOrientation`, `setTransformationFilterSize`, `setTargetVelocityBlend`)
-— see G3. The template parameter itself is a plugin blocker — see G8.
+**Runtime tuning.** As of issue #2, the `wbc.inverse_dynamics.*` keys are applied through
+`SetParameter`. `InverseDynamics` dispatches them to `setFootPositionBasedOnTargetHeight`,
+`setFootPositionBasedOnTargetOrientation`, `setTransformationFilterSize` (now the correct setter —
+was G7) and `setTargetVelocityBlend`; `WBCArcOPT` has no runtime keys and returns `false` (the host
+then logs the key as unsupported). The host no longer casts to `InverseDynamics` (was G3, G5). The
+template parameter that was the plugin blocker (G8) is gone as of M3.2 (#13), so the WBC configures
+and loads exactly like the other five stages.
 
 ### 4.5 `ModelAdaptationInterface`
 
@@ -232,21 +291,107 @@ Header: `ws/src/controllers/include/model_adaptation/model_adaptation_interface.
 | `Eigen::Vector<double, NUM_PARAMS> GetDelta() const` | out | diagnostics (`:1004`) | 100 Hz |
 | `Eigen::Vector<double, 6> GetTotalForceTorque() const` | out | diagnostics (`:1005`) | 100 Hz |
 | `Eigen::Vector<double, NUM_PARAMS> GetSV() const` | out | diagnostics (`:1007`) | 100 Hz |
+| `bool SetParameter(const std::string&, const rclcpp::ParameterValue&)` | in | parameter-event callback | on `ros2 param set` |
 
 `NUM_PARAMS = 3` (mass, CoM offset terms). The whole stage is gated on the `use_model_adaptation`
 parameter; when it is false none of these are called.
 
 **`DoModelAdaptation` is the only mutating stage method in the pipeline.** It takes the host's
 `QuadModelPino` by non-const reference and returns `true` if it changed it. On `true`, the host
-broadcasts the new model to every other stage — `mpc_`, `gs_`, `wbc_`, `slc_` — and publishes it on
-`/quad_model` (`:1009-1032`). This is the model-update fan-out that issue #15 (M3.4) will factor
-into a helper.
+broadcasts the new model to every other stage — `mpc_`, `gs_`, `wbc_`, `slc_`, `contact_logic_` —
+and publishes it on `/quad_model`. Since #15 (M3.4) that fan-out is a registry rather than a
+hardcoded list in `ModelAdaptationCallback`: the host registers each stage once at bring-up with the
+lock its `UpdateModel` runs under, and the callback makes one `Broadcast` call. A stage joins by
+implementing the `UpdateModel` its interface already declares plus one registration line — see
+[`model_update_broadcast.md`](model_update_broadcast.md).
 
 **Call order.** `UpdateState` → `UpdateGaitSequence` → `DoModelAdaptation` → the five `Get*`
 accessors (called unconditionally, for `/quad_model_debug`, whether or not the model changed).
 
 **Threading.** This stage runs in its own callback group with **no mutex protecting the model it
 mutates** — see G6. The `Get*` accessors are `const` and must be side-effect free.
+
+### 4.6 `ContactLogicInterface`
+
+Header: `ws/src/controllers/include/mit_controller/contact_logic_interface.hpp`
+
+> **Status: specified in M1.4 (issue #4); implemented and wired in M3.1 (issue #12).** This section is
+> the behavioural contract the extraction had to reproduce, written while the logic still ran inline
+> in `ControlLoopCallback`. It is now implemented by `DefaultContactLogic`
+> (`src/mit_controller/default_contact_logic.cpp`), packaged as the `default_contact_logic` stock
+> plugin and loaded by the host through `contact_logic.type`. `test/test_default_contact_logic.cpp`
+> checks the FSM table below branch by branch.
+
+The stage reconciles the **planned** contact schedule from the gait sequencer against the **sensed**
+foot contacts from the state: it runs a per-leg FSM and overrides the WBC inputs — contact flags,
+wrenches and foot targets — for feet that are in early, late or lost contact.
+
+| Method | Dir | Called from (planned) | Rate |
+|---|---|---|---|
+| `void UpdateState(const StateInterface&)` | in | `ControlLoopCallback`, under `wbc_lock_` | 500 Hz |
+| `void UpdateGaitSequence(const GaitSequence&)` | in | `ControlLoopCallback` | 500 Hz |
+| `void UpdateWrenchSequence(const WrenchSequence&)` | in | `ControlLoopCallback` | 500 Hz |
+| `void UpdateSwingLegState(const FeetTargets&, const std::array<double, N_LEGS>&, const std::array<SwingLegControllerInterface::LegState, N_LEGS>&)` | in | `ControlLoopCallback` | 500 Hz |
+| `void UpdateModel(const ModelInterface&)` | in | `ModelAdaptationCallback` | event-driven |
+| `void Reconcile(FootContacts&, Wrenches&, FeetTargets&)` | in/out | `ControlLoopCallback` | 500 Hz |
+| `void GetLegContactStates(std::array<LegContactState, N_LEGS>&) const` | out | diagnostics | 500 Hz |
+| `void GetContactEvents(ContactEvents&) const` | out | logging / heartbeat | 500 Hz |
+| `bool SetParameter(const std::string&, const rclcpp::ParameterValue&)` | in | parameter-event callback | on `ros2 param set` |
+
+**Data.** In: the sensed contacts (`StateInterface::GetFeetContacts`), the planned schedule
+(`GaitSequence`), the MPC forces (`WrenchSequence`) and the SLC outputs (targets, progress,
+`LegState`). Out, all three in/out arguments of `Reconcile`: `FootContacts = std::array<bool,
+N_LEGS>` and `Wrenches = std::array<Eigen::Vector3d, N_LEGS>` (restated from
+`WBCInterface::FootContact`/`::Wrenches`; since M3.2 that is enforced by `static_assert` rather than
+forced by G8), and
+`FeetTargets`. `LegContactState` is `{SWING, STANCE, EARLY_CONTACT, LATE_CONTACT, LOST_CONTACT}`;
+`ContactEvents` carries the per-leg transitions for host logging and the `num_early_contacts`
+heartbeat counter, so the stage needs no logger or heartbeat dependency.
+
+**Call order.** `UpdateState` → `UpdateGaitSequence` → `UpdateWrenchSequence` → `UpdateSwingLegState`
+→ `Reconcile` → the two `Get*` accessors. The host seeds the three `Reconcile` arguments with
+`wrench_sequence.forces[0]`, the SLC `feet_targets` and `gait_sequence.contact_sequence[0]` — exactly
+the inline code's starting point — and the method reconciles them in place. `Reconcile` mutates
+internal state (per-leg status, hold positions) and must be called **exactly once per cycle**, like
+`ModelAdaptationInterface::DoModelAdaptation`; the `Get*` accessors are `const` and may be called
+more than once.
+
+**Behavioural contract — the FSM.** Per leg, with `planned = contact_sequence[0][leg]` and `sensed =
+GetFeetContacts()[leg]`, gated on the four detection toggles:
+
+| From | Condition | To | Side effect |
+|---|---|---|---|
+| `SWING` | `early_contact_detection ∧ ¬planned ∧ sensed ∧ progress > 0.5` | `EARLY_CONTACT` | record hold position in **world**; `num_early_contacts++` |
+| `SWING` | `late_contact_detection ∧ planned ∧ ¬sensed` | `LATE_CONTACT` | record slip hold in **body** frame |
+| `SWING` | `planned` (neither above) | `STANCE` | — |
+| `STANCE` | `¬planned` | `SWING` | — |
+| `STANCE` | `lost_contact_detection ∧ planned ∧ ¬sensed` | `LOST_CONTACT` | record slip hold in **body** frame |
+| `EARLY_CONTACT` | `planned` | `STANCE` | — |
+| `LATE_CONTACT` / `LOST_CONTACT` | `sensed ∧ planned` | `STANCE` | contact regained, stance scheduled |
+| `LATE_CONTACT` / `LOST_CONTACT` | `sensed ∧ ¬planned` | `SWING` | contact regained, flight scheduled |
+| `LATE_CONTACT` / `LOST_CONTACT` | `late_contact_reschedule_swing_phase ∧ ¬planned` | `SWING` | reschedule swing despite missing contact |
+
+`LOST_CONTACT` shares `LATE_CONTACT`'s transitions and output. Output application after the
+transition: `STANCE` tracks `foot_position_sequence[0]` (zero velocity/acceleration) and records it
+as the last target; `SWING` zeroes the wrench and, if the SLC has not started this swing
+(`LegState` `STANCE`/`NOT_STARTED`), holds the last target and raises the
+`swing_scheduled_before_slc_started` event; `EARLY_CONTACT` forces the contact flag true, holds the
+recorded world position, and substitutes the next scheduled stance wrench rotated into the current
+orientation; `LATE_CONTACT`/`LOST_CONTACT` force the contact flag false, hold the slip position
+transformed back to world, and zero the wrench.
+
+**Threading.** The host runs this stage inside the control loop under `wbc_lock_`, single-threaded
+with respect to the WBC. `UpdateModel` arrives from the model-adaptation broadcast (§4.5), and M3.1
+issues it under that same `wbc_lock_`, next to `wbc_->UpdateModel` — so `UpdateModel` and `Reconcile`
+*are* mutually excluded for this stage, and `DefaultContactLogic` takes no lock of its own. This is
+narrower than G6, which is about the gait sequencer and the model object itself and stays open.
+
+**Runtime tuning.** `SetParameter` handles the four `contact_logic.*` detection toggles, which were
+host member flags before M3.1. They are named as constants in `contact_logic_params`
+(`contact_logic_interface.hpp`) and routed by the host under `wbc_lock_`. The host also accepts the
+pre-M3.1 flat spelling and re-sets it onto the nested key
+(`stage_selection::ContactLogicKeyFromLegacy`), so configs and scripts written before M3.1 keep
+working; #23 (M5.4) removes that bridge.
 
 ## 5. Gaps between the contracts and the current host
 
@@ -255,20 +400,22 @@ where the contract is incomplete. Each has an owning follow-up issue.
 
 | # | Gap | Evidence | Impact | Owner |
 |---|---|---|---|---|
-| G1 | MPC tuning setters not on `MPCInterface` | `reinterpret_cast<MPC*>` at `mit_controller_node.cpp:367, 376, 382, 387, 392, 824, 831`; methods at `mpc.hpp:145-148` | Blocks plugin loading. `:824`/`:831` are on the **hot 100 Hz path** (weight switch on `KEEP`↔`MOVE`), not just the parameter callback | #2 |
-| G2 | SLC tuning setters not on the interface | `reinterpret_cast<SwingLegController*>` at `:458, 462, 471` | Blocks plugin loading | #2 |
-| G3 | WBC tuning setters not on the interface | `reinterpret_cast<InverseDynamics*>` at `:440, 446, 452, 466` | Blocks plugin loading; also `InverseDynamics`-specific, so meaningless for the Go2 `WBCArcOPT` path | #2 |
-| G4 | Missing virtual destructors | `SwingLegControllerInterface`, `WBCInterface<T>`, `ModelAdaptationInterface` had none, yet the host owns all three as `std::unique_ptr<Interface>` (`mit_controller_node.hpp:111-117`) | Deleting through the base pointer was undefined behaviour and leaked the `unique_ptr<ModelInterface>` / `unique_ptr<StateInterface>` each implementation owns | **fixed in M1.1** |
-| G5 | `typeid` guards are dead code | `:439, 445, 451` compare `typeid(wbc_.get())` — a *pointer* type — with `typeid(InverseDynamics)` | Never equal, so the three `wbc.inverse_dynamics.*` parameters silently do nothing at runtime | #2 |
-| G6 | Inconsistent lock discipline | `ModelAdaptationCallback` mutates `quad_model_` unlocked (`:998`); `gs_->UpdateModel` (`:1014`) and `slc_->UpdateState` (`:816`) run under `mpc_lock_` rather than their own stage lock | The contract cannot state "one mutex per stage" until this is regularised. Model ownership is undefined | #9 |
-| G7 | Wrong setter called | `:466-468` — parameter `wbc.inverse_dynamics.transformation_filter_size` calls `setFootPositionBasedOnTargetOrientation(integer_value)` instead of `setTransformationFilterSize` | Pre-existing bug; the filter size cannot be changed at runtime and a bool setter receives an int | #2 |
-| G8 | `WBCInterface` is a template | `WBCType` is a `std::conditional<USE_WBC, …>` typedef (`mit_controller_node.hpp:112-114`); `reinterpret_cast` at `:604, 623, 1257, 1269` | A class template cannot be a pluginlib base class. The command type must become a runtime choice | #13 |
-| G9 | `AdaptiveGaitSequencer` config escape hatch | `dynamic_cast` + `ad_gs->Gait()` at `:316-317`, reaching ~15 `AdaptiveGait` setters | The one *guarded* cast, so not unsafe — but still concrete-type coupling. Needs a generic per-stage parameter hook | #2 |
-| G10 | Unsynchronised diagnostic reads | `gs_->GetGaitState()` at `:959` runs after `gait_sequencer_lock_` is released at `:881`; `slc_->GetCurrentTrajs()` at `:1301` runs after `wbc_lock_` is released and never takes `slc_lock_` | Data race against `UpdateModel` / `SLCLoopCallback`. Low severity (diagnostics only) but it means `Get*` methods cannot be documented as "called under the stage lock" | #9 |
+| G1 | MPC tuning setters not on `MPCInterface` | was `reinterpret_cast<MPC*>` at `mit_controller_node.cpp:367, 376, 382, 387, 392, 824, 831`; methods at `mpc.hpp:145-148` | Blocked plugin loading. `:824`/`:831` were on the **hot 100 Hz path** (weight switch on `KEEP`↔`MOVE`). **Fixed in M1.2:** setters dispatched via `MPCInterface::SetParameter`; the weight switch moved into `MPC::UpdateGaitSequence` | #2 — **fixed** |
+| G2 | SLC tuning setters not on the interface | was `reinterpret_cast<SwingLegController*>` at `:458, 462, 471` | Blocked plugin loading. **Fixed in M1.2:** dispatched via `SwingLegControllerInterface::SetParameter` | #2 — **fixed** |
+| G3 | WBC tuning setters not on the interface | was `reinterpret_cast<InverseDynamics*>` at `:440, 446, 452, 466` | Blocked plugin loading; `InverseDynamics`-specific. **Fixed in M1.2:** dispatched via `WBCInterface::SetParameter`; `WBCArcOPT` returns `false` | #2 — **fixed** |
+| G4 | Missing virtual destructors | `SwingLegControllerInterface`, `WBCInterface`, `ModelAdaptationInterface` had none, yet the host owns all three as `std::unique_ptr<Interface>` (`mit_controller_node.hpp:111-117`) | Deleting through the base pointer was undefined behaviour and leaked the `unique_ptr<ModelInterface>` / `unique_ptr<StateInterface>` each implementation owns | **fixed in M1.1** |
+| G5 | `typeid` guards are dead code | was `:439, 445, 451` comparing `typeid(wbc_.get())` — a *pointer* type — with `typeid(InverseDynamics)` | Never equal, so the three `wbc.inverse_dynamics.*` parameters silently did nothing. **Fixed in M1.2:** dead guards removed; keys routed to `WBCInterface::SetParameter` | #2 — **fixed** |
+| G6 | Inconsistent lock discipline | `ModelAdaptationCallback` mutates `quad_model_` unlocked (`:998`); `gs_->UpdateModel` (`:1014`) and `slc_->UpdateState` (`:816`) run under `mpc_lock_` rather than their own stage lock | The contract cannot state "one mutex per stage" until this is regularised. Model ownership is undefined. **Still open after M3.4**, but no longer spread out: since #15 the broadcast's half of it is one `Register` line at bring-up naming `mpc_lock_` instead of `gait_sequencer_lock_` ([`model_update_broadcast.md`](model_update_broadcast.md) §4), so fixing it there is a one-argument edit. The unlocked `quad_model_` mutation and the `slc_->UpdateState` call are still in the loop bodies, which M2.4 left unchanged on purpose so that moving the stages behind pluginlib could be reviewed as behaviour-preserving — see [`pipeline_host.md`](pipeline_host.md) §8 | #9 — deferred |
+| G7 | Wrong setter called | was `:466-468` — parameter `wbc.inverse_dynamics.transformation_filter_size` called `setFootPositionBasedOnTargetOrientation(integer_value)` instead of `setTransformationFilterSize` | Pre-existing bug; the filter size could not be changed at runtime and a bool setter received an int. **Fixed in M1.2:** `InverseDynamics::SetParameter` calls the correct setter | #2 — **fixed** |
+| G8 | ~~`WBCInterface` is a template~~ | `WBCType` was a `std::conditional<USE_WBC, …>` typedef (`mit_controller_node.hpp:112-114`); `reinterpret_cast` was at `:604, 623, 1257, 1269` | A class template cannot be a pluginlib base class, so the command type had to become a runtime choice. **Partially addressed in M1.2:** all four `reinterpret_cast`s removed (construction and `GetJointCommand` dispatch moved into `if constexpr` templated contexts; a mismatched `leg_control_mode_` became a logged error instead of UB). **Closed by M3.2 (#13):** `WBCInterface` is no longer a template — it declares both getters plus `SupportedCommandMode()`, both stock WBCs register under the one base `StagePlugin<WBCInterface>`, `WBCType`/`WBC_PLUGIN_BASE` are deleted, and the pairing is validated once at bring-up instead of per cycle | #13 ✔ |
+| G9 | `AdaptiveGaitSequencer` config escape hatch | was `dynamic_cast` + `ad_gs->Gait()` at `:316-317`, reaching ~15 `AdaptiveGait` setters | The one *guarded* cast, so not unsafe — but still concrete-type coupling. **Fixed in M1.2:** the ~15 setters moved into `AdaptiveGaitSequencer::SetParameter`; the host no longer `dynamic_cast`s | #2 — **fixed** |
+| G10 | Unsynchronised diagnostic reads | `gs_->GetGaitState()` at `:959` runs after `gait_sequencer_lock_` is released at `:881`; `slc_->GetCurrentTrajs()` at `:1301` runs after `wbc_lock_` is released and never takes `slc_lock_` | Data race against `UpdateModel` / `SLCLoopCallback`. Low severity (diagnostics only) but it means `Get*` methods cannot be documented as "called under the stage lock". **Still open after M2.4**, for the same reason as G6 — [`pipeline_host.md`](pipeline_host.md) §8 | #9 — deferred |
+| G11 | ~~Contact FSM reads unlocked member state~~ | the `LATE_CONTACT`/`LOST_CONTACT` output branch read the member `quad_state_` directly (`GetPositionInWorld`/`GetOrientationInWorld`) instead of the `quad_state_temp` copy taken under `quad_state_lock_` that the rest of the callback used | Was a data race against the state subscription writing `quad_state_`. **Closed by M3.1 (#12):** the stage reads only what `UpdateState` gave it, which is the locked copy | #12 ✔ |
 
-**Cast inventory:** `grep -c reinterpret_cast ws/src/controllers/src/mit_controller_node.cpp` → **18**,
-covering G1 (7), G2 (3), G3 (4), G8 (4). Issue #2's acceptance criterion is that this count reaches
-zero for stage access.
+**Cast inventory:** `grep -c reinterpret_cast ws/src/controllers/src/mit_controller_node.cpp` → **0**
+as of M1.2 (was 18, covering G1×7, G2×3, G3×4, G8×4). `dynamic_cast` for stage access is likewise 0
+(was 1, G9). The remaining `static_cast`s are the pre-existing `leg_control_mode_` enum conversions,
+not stage access. Issue #2's acceptance criterion — zero casts for stage access — is met.
 
 ## 6. Proposed API changes for M1.2 (issue #2)
 
@@ -316,7 +463,21 @@ Two changes are needed regardless of which option is chosen:
 2. **G8 must be resolved before `WBCInterface` can be a plugin base.** Suggested direction: a
    non-template `WBCInterface` with a `GetJointCommand(JointCommandVariant&)` or separate
    `GetCartesianCommand` / `GetJointCommand` methods plus a `SupportedCommandType()` query. This is
-   issue #13's scope; M1.2 should not attempt it.
+   issue #13's scope; M1.2 should not attempt it. **Done in M3.2** — the second option was taken
+   (separate getters + `SupportedCommandMode()`); a variant return was rejected because the host
+   already knows the family it needs from `leg_control_mode`, so visiting one would add hot-path
+   work for nothing.
+
+**Implemented in M1.2 (issue #2).** Option B was taken. `SetParameter(const std::string&, const
+rclcpp::ParameterValue&)` is now a pure-virtual on all five interfaces (§4), the concrete stages keep
+their typed setters and dispatch to them, and the host parameter-event callback is a pure prefix
+router (`gait*` → `gs_`, `mpc_*` → `mpc_`, `slc_*`/`maximum_swing_leg_progress_to_update_target` →
+`slc_`, `wbc.*` → `wbc_`) that never names a concrete stage type. Change (1) was done by moving the
+`KEEP`↔`MOVE` switch into `MPC::UpdateGaitSequence` (the host still mirrors `sequence_mode` into the
+heartbeat). Change (2) — de-templating `WBCInterface` — was **not** attempted in M1.2; it was done in
+M3.2 (#13). M1.2 did remove the four G8 `reinterpret_cast`s by constructing and dispatching the WBC
+inside templated (`if constexpr`) contexts, so a mismatched `leg_control_mode_` became a logged error
+rather than UB; M3.2 then moved that check to bring-up and made it fatal.
 
 ## 7. Adjacent seams
 
@@ -326,15 +487,21 @@ Not part of the five frozen contracts, but relevant to the modularity work:
   (`get_t_stance(leg)`), already well-formed. Used *inside* gait sequencer implementations, not by
   the host. No changes needed.
 - **`StateInterface` / `ModelInterface`** (`common/`) — the shared data types every stage consumes.
-  Issue #3 (M1.3) covers exposing these as a stable package surface.
-- **The contact FSM has no interface at all.** `SWING / STANCE / EARLY_CONTACT / LATE_CONTACT /
-  LOST_CONTACT` is declared as a private enum on `MITController`
-  (`mit_controller_node.hpp:50`) and implemented inline in `ControlLoopCallback`
-  (`:1088-1200`), controlling early/late/lost contact handling and swing-phase rescheduling. It is a
-  sixth pipeline stage in everything but name. Extracting it is issue #4 (M1.4, define
-  `ContactLogicInterface`) and issue #12 (M3.1, extract the implementation).
-- **The model-update broadcast** (`:1009-1032`) is duplicated logic across four stages and is
-  issue #15 (M3.4).
+  Already installed and exported by the `common` package. The five *pipeline* types
+  (`Target`, `GaitSequence`, `WrenchSequence`, `MPCPrediction`, `FeetTargets`) are exported from
+  `controllers` as of M1.3 — see [`pipeline_types.md`](pipeline_types.md). The stage **interface**
+  headers are not exported yet; that is M2.1 (issue #6).
+- **The contact FSM is a sixth pipeline stage.** `SWING / STANCE / EARLY_CONTACT / LATE_CONTACT /
+  LOST_CONTACT` is declared as a private enum on `MITController` (`mit_controller_node.hpp:50`) and
+  implemented inline in `ControlLoopCallback` (`:989-1109`), controlling early/late/lost contact
+  handling and swing-phase rescheduling. Its contract is now specified in §4.6 behind
+  `mit_controller/contact_logic_interface.hpp` (issue #4, M1.4 — header stub only). Extracting the
+  implementation into a `DefaultContactLogic` plugin and wiring the host to call it is issue #12
+  (M3.1).
+- **The model-update broadcast** was duplicated logic across four stages (five after M3.1) written
+  out by hand in `ModelAdaptationCallback`. **Fixed in M3.4** (issue #15): it is a registration
+  block at bring-up plus one `Broadcast` call, and a new stage joins it with a single line — see
+  [`model_update_broadcast.md`](model_update_broadcast.md).
 
 ## 8. Related issues
 
@@ -343,9 +510,10 @@ Not part of the five frozen contracts, but relevant to the modularity work:
 | #24 | [Meta] Modular Go2 control | Parent |
 | #1 | [M1.1] Audit and freeze stage interface APIs | **This document** |
 | #2 | [M1.2] Remove host→concrete casts | Consumes §5 (G1, G2, G3, G5, G7, G9) and §6 |
-| #3 | [M1.3] Shared pipeline data types package surface | Consumes §7 |
-| #4 | [M1.4] Define `ContactLogicInterface` | Consumes §7 |
-| #5 | [M1.5] Contract tests / compile smoke | Asserts §4 method tables |
-| #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns G6, G10 |
-| #13 | [M3.2] Runtime WBC / command-type profile | Owns G8 |
-| #15 | [M3.4] Model update broadcast helper | Consumes §4.5 |
+| #3 | [M1.3] Shared pipeline data types package surface | Consumed §7 — **done**, see [`pipeline_types.md`](pipeline_types.md) |
+| #4 | [M1.4] Define `ContactLogicInterface` | **This PR** — §4.6, header stub; adds G11 |
+| #5 | [M1.5] Contract tests / compile smoke | Asserts §4 method tables — [`contract_tests.md`](contract_tests.md) |
+| #9 | [M2.4] Refactor `MITController` into thin `PipelineHost` | Owns G6, G10 — both deferred out of M2.4, see [`pipeline_host.md`](pipeline_host.md) §8 |
+| #12 | [M3.1] Extract contact FSM into `ContactLogic` plugin | Implements §4.6; owns G11 |
+| #13 ✔ | [M3.2] Runtime WBC / command-type profile | Owned G8 — closed: `WBCInterface` de-templated, one plugin base, `wbc.type` selectable at launch |
+| #15 ✔ | [M3.4] Model update broadcast helper | Consumed §4.5 — closed: the fan-out is a registry, a stage opts in with the `UpdateModel` its interface already declares plus one registration line, see [`model_update_broadcast.md`](model_update_broadcast.md) |

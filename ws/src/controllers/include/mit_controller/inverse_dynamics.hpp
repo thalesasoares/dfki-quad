@@ -6,7 +6,7 @@
 #include "common/quaternion_operations.hpp"
 #include "wbc_interface.hpp"
 
-class InverseDynamics : public WBCInterface<CartesianCommands> {
+class InverseDynamics : public WBCInterface {
  private:
   // Model / State
   std::unique_ptr<ModelInterface> quad_model_;
@@ -45,9 +45,19 @@ class InverseDynamics : public WBCInterface<CartesianCommands> {
   void UpdateFeetTarget(const FeetTargets& feet_targets) override;
   void UpdateWrenches(const Wrenches& wrenches) override;
   void UpdateFootContact(const FootContact& foot_contact) override;
-  WBCReturn GetJointCommand(CartesianCommands& joint_command) override;
+  // See WBCArcOPT::kCommandMode for why this is a class constant as well as the virtual.
+  static constexpr WBCCommandMode kCommandMode = WBCCommandMode::kCartesian;
+  WBCCommandMode SupportedCommandMode() const override { return kCommandMode; }
+  WBCReturn GetCartesianCommand(CartesianCommands& cartesian_command) override;
+  // Not this controller's command family — the host validates the mode at bring-up and never
+  // calls this (wbc_interface.hpp).
+  WBCReturn GetJointCommand(JointTorqueVelocityPositionCommands& joint_command) override {
+    (void)joint_command;
+    return {false, 0.0, 0.0};
+  }
   void UpdateTarget(const Eigen::Quaterniond& orientation,
                     const Eigen::Vector3d& position,
                     const Eigen::Vector3d& lin_vel,
                     const Eigen::Vector3d& ang_vel) override;
+  bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override;
 };

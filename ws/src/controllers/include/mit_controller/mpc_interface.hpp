@@ -1,10 +1,12 @@
 #pragma once
 
+#include <rclcpp/parameter_value.hpp>
+
 #include <common/model_interface.hpp>
+#include <string>
 
 #include "gait_sequence.hpp"
 #include "mpc_prediction.hpp"
-#include "potato_sim/potato_model.hpp"
 #include "wrench_sequence.hpp"
 
 struct SolverInformation {
@@ -60,5 +62,15 @@ class MPCInterface {
   virtual void GetWrenchSequence(WrenchSequence &wrench_sequence,
                                  MPCPrediction &state_prediction,
                                  SolverInformation &solver_information) = 0;
+  /**
+   * Applies a runtime parameter to this stage.
+   * Called from the host parameter-event callback with the stage's mutex (mpc_lock_) held, never
+   * from the control loops. An implementation that recognises no runtime parameters returns false.
+   *
+   * @param name the full ROS parameter name (e.g. "mpc_fmax")
+   * @param value the new parameter value
+   * @return true if the key was recognised and applied, false otherwise (the host logs a warning)
+   */
+  virtual bool SetParameter(const std::string &name, const rclcpp::ParameterValue &value) = 0;
   virtual ~MPCInterface() = default;
 };

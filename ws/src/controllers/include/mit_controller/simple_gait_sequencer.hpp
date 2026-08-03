@@ -31,6 +31,10 @@ class SimpleGaitSequencer : public GaitSequencerInterface {
   void GetGaitState(interfaces::msg::GaitState& state) override;
   void UpdateModel(const ModelInterface& quad_model) override;
   GS_Type GetType() const override;
+  // No runtime-tunable parameters: gait changes go through a full sequencer reload in the host.
+  bool SetParameter(const std::string& /*name*/, const rclcpp::ParameterValue& /*value*/) override {
+    return false;
+  }
 
  private:
   Target target_;

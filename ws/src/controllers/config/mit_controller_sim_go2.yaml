@@ -1,6 +1,24 @@
 mit_controller_node: ##### SIMULATION
   ros__parameters:
     use_sim_time: True
+    # Which implementation runs in each pipeline stage. Each value names a
+    # pluginlib class declared in controllers' plugins/*.xml; a value that names
+    # no declared plugin is a fatal bring-up error listing what *is* declared,
+    # never a silent fallback. See doc/modularity/stage_loading.md §4 for the
+    # vocabulary and doc/modularity/stock_plugins.md for the implementations.
+    # Read at bring-up only, except gs.type, which can also be switched at
+    # runtime (`ros2 param set`, joystick Y) — the host then rebuilds the gait
+    # sequencer off-loop and swaps it in.
+    gs:
+      type: simple_gait # gait sequencer: simple_gait | adaptive_gait | bio_gait
+    mpc:
+      type: acados_mpc # model predictive controller: acados_mpc
+    slc:
+      type: bezier_swing # swing leg controller: bezier_swing
+    model_adaptation:
+      type: kf_adaptation # model adaptation: kf_adaptation (Kalman filter) | rls_adaptation (recursive least squares)
+    contact_logic:
+      type: default_contact_logic # contact reconciliation: default_contact_logic
     initial_height: 0.30
     leg_control_mode: 0 # 0: wbc; 3: ikin
     joint_control_gains: # wbc
@@ -35,7 +53,6 @@ mit_controller_node: ##### SIMULATION
       -0.197, 0.1738, 0.0,
       -0.197, -0.1738, 0.0
     ]
-    ma_mode: 0 #0:KF, 1:RLS
     ma_forgetting_factor: 0.5
     ma_convergence_threshold: [0.695, 0.12, 0.11]
     ma_process_noise: [0.005, 0.0005, 0.0005]
@@ -54,6 +71,10 @@ mit_controller_node: ##### SIMULATION
       gait:
         disturbance_correction: 0.0
     wbc:
+      # whole body control. wbc_arc_opt produces joint commands (needs leg_control_mode 0 or 1);
+      # inverse_dynamics produces cartesian commands (needs leg_control_mode 2 or 3). Since #13
+      # (M3.2) either is loadable by any build — this key selects, the build flavour does not.
+      type: wbc_arc_opt
       inverse_dynamics:
         foot_position_based_on_target_height: false
         foot_position_based_on_target_orientation: false

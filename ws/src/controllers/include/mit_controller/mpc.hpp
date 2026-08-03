@@ -12,7 +12,9 @@
 
 class MPC : public MPCInterface {
  public:
-  static constexpr int STATE_SIZE = 13;
+  // Defined by the exported pipeline constant so the host can size/validate the
+  // state weight vectors without including this header (issue #9, M2.4).
+  static constexpr int STATE_SIZE = MPC_STATE_SIZE;
   static constexpr int NUM_FEET = N_LEGS;
   static constexpr int INPUT_SIZE = 3 * NUM_FEET;
   static constexpr int PREDICTION_HORIZON = MPC_PREDICTION_HORIZON;
@@ -33,6 +35,13 @@ class MPC : public MPCInterface {
   double fmin_;
   double fmax_;
   double mu_;
+
+  // MPC cost weights per gait-sequence mode. The active set follows sequence_mode of the gait
+  // sequence provided in UpdateGaitSequence; the KEEP<->MOVE switch used to live in the host
+  // (issue #2, gap G1).
+  Eigen::Matrix<double, STATE_SIZE - 1, 1> state_weights_stand_;
+  Eigen::Matrix<double, STATE_SIZE - 1, 1> state_weights_move_;
+  GaitSequence::Mode active_weights_mode_;
 
   // This typedefs automatically enforce the correct storage order to be used as raw pointers for acados
   // (see: https://discourse.acados.org/t/storage-order-of-c-interface/1379/3)
@@ -119,7 +128,8 @@ class MPC : public MPCInterface {
 
  public:
   MPC(double alpha,
-      const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights,
+      const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights_stand,
+      const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights_move,
       double mu,
       double fmin,
       double fmax,
@@ -146,6 +156,8 @@ class MPC : public MPCInterface {
   void SetInputWeights(double alpha);
   void SetFmax(double fmax);
   void SetMu(double mu);
+
+  bool SetParameter(const std::string &name, const rclcpp::ParameterValue &value) override;
 
   ~MPC() override;
 };

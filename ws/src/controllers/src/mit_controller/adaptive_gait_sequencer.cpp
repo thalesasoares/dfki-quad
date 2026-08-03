@@ -6,6 +6,7 @@
 #include <array>
 #include <optional>
 
+#include "common/sequence_containers.hpp"
 #include "gait_sequence.hpp"
 #include "mit_controller_params.hpp"
 #include "mpc_trajectory_planner.hpp"
@@ -75,4 +76,61 @@ void AdaptiveGaitSequencer::GetGaitState(interfaces::msg::GaitState& state) {
 void AdaptiveGaitSequencer::UpdateModel(const ModelInterface& model) { *quad_model_ = model; }
 
 AdaptiveGait& AdaptiveGaitSequencer::Gait() { return gait_; }
+
+bool AdaptiveGaitSequencer::SetParameter(const std::string& name, const rclcpp::ParameterValue& value) {
+  const auto expect_double = value.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE;
+  const auto expect_bool = value.get_type() == rclcpp::ParameterType::PARAMETER_BOOL;
+  const auto expect_int = value.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER;
+  const auto expect_double_array = value.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY;
+
+  if (name == "adaptive_gait_sequencer.gait.phase_offset") {
+    if (!expect_double_array || value.get<std::vector<double>>().size() != N_LEGS) return false;
+    gait_.set_offset(to_array<N_LEGS>(value.get<std::vector<double>>()));
+  } else if (name == "adaptive_gait_sequencer.gait.swing_time") {
+    if (!expect_double) return false;
+    gait_.set_swing_time(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.filter_size") {
+    if (!expect_int) return false;
+    gait_.set_filter_size(static_cast<unsigned int>(value.get<int64_t>()));
+  } else if (name == "adaptive_gait_sequencer.gait.zero_velocity_threshold") {
+    if (!expect_double) return false;
+    gait_.set_zero_velocity_threshold(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.switch_offsets") {
+    if (!expect_bool) return false;
+    gait_.set_offset_switch(value.get<bool>());
+  } else if (name == "adaptive_gait_sequencer.gait.gait_change_froude") {
+    if (!expect_double_array || value.get<std::vector<double>>().size() != 2) return false;
+    gait_.set_gait_change_froude(to_array<2>(value.get<std::vector<double>>()));
+  } else if (name == "adaptive_gait_sequencer.gait.standing_foot_position_threshold") {
+    if (!expect_double) return false;
+    gait_.set_standing_foot_position_threshold(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.min_v_cmd_factor") {
+    if (!expect_double) return false;
+    gait_.set_min_v_cmd_factor(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.max_correction_cycles") {
+    if (!expect_double) return false;
+    gait_.set_max_correction_cycles(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.correct_all") {
+    if (!expect_bool) return false;
+    gait_.set_correct_all(value.get<bool>());
+  } else if (name == "adaptive_gait_sequencer.gait.correction_period") {
+    if (!expect_double) return false;
+    gait_.set_correction_period(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.disturbance_correction") {
+    if (!expect_double) return false;
+    gait_.set_disturbance_correction(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.min_v") {
+    if (!expect_double) return false;
+    gait_.set_min_v(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.offset_delay") {
+    if (!expect_double) return false;
+    gait_.set_offset_delay(value.get<double>());
+  } else if (name == "adaptive_gait_sequencer.gait.max_stride_length") {
+    if (!expect_double) return false;
+    gait_.set_max_stride_length(value.get<double>());
+  } else {
+    return false;
+  }
+  return true;
+}
 GS_Type AdaptiveGaitSequencer::GetType() const { return ADAPTIVE; }

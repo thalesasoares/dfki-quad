@@ -1,0 +1,41 @@
+<!--
+  Gait sequencer stage plugins.
+
+  base_class_type: StagePlugin<GaitSequencerInterface>
+    (mit_controller/stage_plugin.hpp + mit_controller/gait_sequencer_interface.hpp)
+
+  Stock wrappers filled in by M2.3 (issue #8): simple_gait, adaptive_gait; bio_gait
+  joined in M4.1 (#16). The wrappers live in
+  src/plugins/gait_sequencer_plugins.cpp, built into libgait_sequencer_plugins.
+
+  The '<' in base_class_type must be XML-escaped as &lt;/&gt;: tinyxml2 unescapes
+  before pluginlib compares against stage_plugin_bases::kGaitSequencer, so the
+  escaped spelling and the C++ string match (stage_loading.md §5).
+
+  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
+  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+-->
+<class_libraries>
+  <library path="libgait_sequencer_plugins">
+    <class name="simple_gait"
+           type="stock_plugins::SimpleGaitSequencerPlugin"
+           base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;">
+      <description>Fixed-gait sequencer (SimpleGaitSequencer): a gait from the gait database or a
+        manual gait, with Raibert foot-step planning.</description>
+    </class>
+    <class name="adaptive_gait"
+           type="stock_plugins::AdaptiveGaitSequencerPlugin"
+           base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;">
+      <description>Velocity-adaptive gait sequencer (AdaptiveGaitSequencer): adapts period, duty
+        factor and phase offsets to the commanded velocity.</description>
+    </class>
+    <class name="bio_gait"
+           type="stock_plugins::BioGaitSequencerPlugin"
+           base_class_type="StagePlugin&lt;GaitSequencerInterface&gt;">
+      <description>Bio-inspired gait sequencer (BioGaitSequencer): picks a gait from the
+        bio-inspired gait database by Froude number and blends between gaits over a transition,
+        with Raibert foot-step planning. Research-grade gait quality; takes no gait parameters
+        of its own.</description>
+    </class>
+  </library>
+</class_libraries>

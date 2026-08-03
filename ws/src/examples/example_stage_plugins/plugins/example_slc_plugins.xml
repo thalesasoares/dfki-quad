@@ -1,0 +1,40 @@
+<!--
+  Example swing-leg-controller stage plugins (issue #17, M4.2).
+
+  base_class_type: StagePlugin<SwingLegControllerInterface>
+    (mit_controller/stage_plugin.hpp + mit_controller/swing_leg_controller_interface.hpp)
+
+  This file is the out-of-package twin of controllers' plugins/slc_plugins.xml.
+  It declares the same base string, is registered against the same ament resource
+  (`controllers__pluginlib__plugin`, see CMakeLists.txt), and is found by the same
+  StageLoader — the only difference is that it ships from another package
+  entirely, which is what M4.2 exists to demonstrate.
+
+  The '<' in base_class_type is XML-escaped as &lt;/&gt; (stage_loading.md §5).
+
+  `path` is the CMake target name WITHOUT a `lib` prefix. This is the one place
+  this file deliberately differs from controllers' stock description XMLs, which
+  all spell it `libmpc_plugins`-style: pluginlib accepts both but warns
+  ("given plugin name 'libX' should be 'X' for better portability") on the
+  prefixed form, because the prefix is platform-specific. A file people are meant
+  to copy should not seed a warning into every package that copies it.
+
+
+  The `example_` prefix on the id is deliberate: this stage makes the robot stand,
+  not walk, and the selected `slc.type` value should say so wherever it is read
+  (README.md §1).
+-->
+<class_libraries>
+  <library path="example_slc_plugins">
+    <class name="example_passthrough_slc"
+           type="example_stage_plugins::PassthroughSlcPlugin"
+           base_class_type="StagePlugin&lt;SwingLegControllerInterface&gt;">
+      <description>
+        Demo/diagnostic swing leg controller: holds every foot at its current
+        position (identity/passthrough) and optionally logs the scheduled leg
+        states at a throttled rate. Not production locomotion — the robot stands
+        and does not step. See this package's README.md.
+      </description>
+    </class>
+  </library>
+</class_libraries>

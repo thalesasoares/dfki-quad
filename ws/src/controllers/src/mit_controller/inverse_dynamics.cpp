@@ -21,7 +21,7 @@ void InverseDynamics::UpdateFeetTarget(const FeetTargets& feet_targets) { feet_t
 void InverseDynamics::UpdateWrenches(const Wrenches& wrenches) { wrench_sequence_ = wrenches; }
 
 void InverseDynamics::UpdateFootContact(const FootContact& foot_contact) { gait_sequence_ = foot_contact; }
-WBCReturn InverseDynamics::GetJointCommand(CartesianCommands& joint_command) {
+WBCReturn InverseDynamics::GetCartesianCommand(CartesianCommands& cartesian_command) {
   auto target_pos_in_world = quad_state_->GetPositionInWorld();
   if (foot_position_based_on_target_height_) {
     target_pos_in_world.z() = target_position_.z();
@@ -38,10 +38,12 @@ WBCReturn InverseDynamics::GetJointCommand(CartesianCommands& joint_command) {
   for (unsigned int leg_idx = 0; leg_idx < N_LEGS; leg_idx++) {
     // Check who is in charge of that leg
     if (gait_sequence_[leg_idx]) {
-      joint_command.velocity[leg_idx].setZero();
-      joint_command.position[leg_idx] = (Eigen::Translation3d(target_pos_in_world) * target_orient_in_world).inverse()
-                                        * feet_targets_.positions[leg_idx];
-      joint_command.force[leg_idx] = -1 * (quad_state_->GetOrientationInWorld().inverse() * wrench_sequence_[leg_idx]);
+      cartesian_command.velocity[leg_idx].setZero();
+      cartesian_command.position[leg_idx] =
+          (Eigen::Translation3d(target_pos_in_world) * target_orient_in_world).inverse()
+          * feet_targets_.positions[leg_idx];
+      cartesian_command.force[leg_idx] =
+          -1 * (quad_state_->GetOrientationInWorld().inverse() * wrench_sequence_[leg_idx]);
 
     } else {  // if planned no contact then slc
       // velocity in body
@@ -65,11 +67,11 @@ WBCReturn InverseDynamics::GetJointCommand(CartesianCommands& joint_command) {
           + skew_matrix(p_be) * quad_state_->GetOrientationInWorld().conjugate().toRotationMatrix() * w_bw;
       Eigen::Vector3d vel_body = vel_world_in_body + vel_foot_in_body;  // TODO: check if correct now
 
-      joint_command.velocity[leg_idx] = vel_body;
-      joint_command.position[leg_idx] =
+      cartesian_command.velocity[leg_idx] = vel_body;
+      cartesian_command.position[leg_idx] =
           (Eigen::Translation3d(quad_state_->GetPositionInWorld()) * quad_state_->GetOrientationInWorld()).inverse()
           * feet_targets_.positions[leg_idx];
-      joint_command.force[leg_idx].setZero();
+      cartesian_command.force[leg_idx].setZero();
     }
   }
   return {true, 0., 0.};
@@ -97,4 +99,27 @@ void InverseDynamics::setTransformationFilterSize(unsigned int filter_size) {
 }
 void InverseDynamics::setTargetVelocityBlend(double blend) {
   target_velocity_blend_ = std::max(std::min(blend, 1.0), 0.0);
+}
+
+bool InverseDynamics::SetParameter(const std::string& name, const rclcpp::ParameterValue& value) {
+  if (name == "wbc.inverse_dynamics.foot_position_based_on_target_height") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) return false;
+    setFootPositionBasedOnTargetHeight(value.get<bool>());
+    return true;
+  } else if (name == "wbc.inverse_dynamics.foot_position_based_on_target_orientation") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) return false;
+    setFootPositionBasedOnTargetOrientation(value.get<bool>());
+    return true;
+  } else if (name == "wbc.inverse_dynamics.target_velocity_blend") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return false;
+    setTargetVelocityBlend(value.get<double>());
+    return true;
+  } else if (name == "wbc.inverse_dynamics.transformation_filter_size") {
+    // Previously the host mistakenly routed this to setFootPositionBasedOnTargetOrientation
+    // (issue #2, gap G7); it now reaches the correct setter.
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER) return false;
+    setTransformationFilterSize(static_cast<unsigned int>(value.get<int64_t>()));
+    return true;
+  }
+  return false;
 }

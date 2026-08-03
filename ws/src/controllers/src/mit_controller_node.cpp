@@ -2,7 +2,6 @@
 
 MITController::MITController(const std::string &nodeName)
     : Node(nodeName),
-      last_gait_sequence_mode_(GaitSequence::KEEP),
       first_quad_state_received_(false),
       quad_model_(*this) {
   this->declare_parameter("initial_height", rclcpp::ParameterType::PARAMETER_DOUBLE);
@@ -75,14 +74,39 @@ MITController::MITController(const std::string &nodeName)
   this->declare_parameter<double>("wbc_solver_tolerances", -1.0);
 
   leg_control_mode_ = static_cast<LEGControlMode>(this->get_parameter("leg_control_mode").as_int());
-  early_contact_detection_ = this->get_parameter("early_contact_detection").as_bool();
-  late_contact_detection_ = this->get_parameter("late_contact_detection").as_bool();
-  lost_contact_detection_ = this->get_parameter("lost_contact_detection").as_bool();
-  late_contact_reschedule_swing_phase_ = this->get_parameter("late_contact_reschedule_swing_phase").as_bool();
   use_model_adaptation_ = this->get_parameter("use_model_adaptation").as_bool();
-  RCLCPP_INFO_EXPRESSION(this->get_logger(), early_contact_detection_, "Early contact detection is activated");
-  RCLCPP_INFO_EXPRESSION(this->get_logger(), late_contact_detection_, "Late contact detection is activated");
-  RCLCPP_INFO_EXPRESSION(this->get_logger(), lost_contact_detection_, "Lost contact detection is activated");
+
+  // The contact stage's four detection toggles, in the ratified `contact_logic.*`
+  // spelling (contact_logic_interface.hpp). The host does not read them any more
+  // — they belong to the stage, which gets them through StageInit — it only
+  // declares them, so that they exist as ROS parameters and can be changed at
+  // runtime.
+  //
+  // Their defaults are the flat keys the host used to read into its own members,
+  // so every config written before M3.1 keeps configuring the same policy without
+  // being touched. An explicitly set nested key wins. #23 (M5.4) drops the flat
+  // spelling and with it this derivation (stage_selection.hpp).
+  this->declare_parameter<bool>(
+      contact_logic_params::kEarlyContactDetection,
+      this->get_parameter(stage_selection::kLegacyEarlyContactDetectionKey).as_bool());
+  this->declare_parameter<bool>(
+      contact_logic_params::kLateContactDetection,
+      this->get_parameter(stage_selection::kLegacyLateContactDetectionKey).as_bool());
+  this->declare_parameter<bool>(
+      contact_logic_params::kLostContactDetection,
+      this->get_parameter(stage_selection::kLegacyLostContactDetectionKey).as_bool());
+  this->declare_parameter<bool>(
+      contact_logic_params::kLateContactRescheduleSwingPhase,
+      this->get_parameter(stage_selection::kLegacyLateContactRescheduleSwingPhaseKey).as_bool());
+  RCLCPP_INFO_EXPRESSION(this->get_logger(),
+                         this->get_parameter(contact_logic_params::kEarlyContactDetection).as_bool(),
+                         "Early contact detection is activated");
+  RCLCPP_INFO_EXPRESSION(this->get_logger(),
+                         this->get_parameter(contact_logic_params::kLateContactDetection).as_bool(),
+                         "Late contact detection is activated");
+  RCLCPP_INFO_EXPRESSION(this->get_logger(),
+                         this->get_parameter(contact_logic_params::kLostContactDetection).as_bool(),
+                         "Lost contact detection is activated");
   // Load PD gains
   switch (leg_control_mode_) {
     case CARTESIAN_JOINT_CONTROL:
@@ -149,7 +173,6 @@ MITController::MITController(const std::string &nodeName)
           this->get_parameter("joint_control_gains.stance_Kd").as_double_array().data());
       break;
   }
-  feet_status_.fill(STANCE);  // Start with current stance
 
   // Prepare target
   target_.active.hybrid_x_dot = true;
@@ -182,20 +205,24 @@ MITController::MITController(const std::string &nodeName)
   mpc_call_back_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   model_adaptation_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
-  // assert that it fits to WBC
+  // Command publisher matching the configured leg control mode.
+  //
+  // The two `assert(typeid(wbc_.get()) == ...)` checks that used to guard this
+  // switch are gone (issue #9): they ran before any WBC existed, and comparing
+  // `typeid` of a *pointer* compares static types, so both were tautologies that
+  // could never fire. The real guard is `ValidateWBCCommandMode`, which runs once
+  // the WBC has actually been loaded (further down this constructor) and refuses
+  // to start a pipeline whose WBC cannot fill the message created here.
   switch (leg_control_mode_) {
     case JOINT_CONTROL:
       [[fallthrough]];
     case JOINT_TORQUE_CONTROL:
-      assert(typeid(wbc_.get()) == typeid(WBCInterface<JointTorqueVelocityPositionCommands> *)
-             or typeid(wbc_.get()) == typeid(WBCInterface<JointTorqueCommands> *));
       leg_joint_cmd_publisher_ =
           this->create_publisher<interfaces::msg::JointCmd>("leg_joint_cmd", QOS_RELIABLE_NO_DEPTH);
       break;
     case CARTESIAN_STIFFNESS_CONTROL:
       [[fallthrough]];
     case CARTESIAN_JOINT_CONTROL:
-      assert(typeid(wbc_.get()) == typeid(WBCInterface<CartesianCommands> *));
       model_adaptation_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
       leg_cmd_publisher_ = this->create_publisher<interfaces::msg::LegCmd>("leg_cmd", QOS_RELIABLE_NO_DEPTH);
@@ -276,12 +303,40 @@ MITController::MITController(const std::string &nodeName)
   this->declare_parameter<std::vector<double>>("adaptive_gait_sequencer.gait.phase_offset", {0.0, 0.5, 0.5, 0.0});
   this->declare_parameter<std::vector<double>>("adaptive_gait_sequencer.gait.gait_change_froude", {0.02, 0.006});
 
+  // Which implementation each pipeline stage uses. These five strings are the
+  // only thing the host knows about stage selection: they name a pluginlib class
+  // that StageLoader resolves, and an unknown one is a loud bring-up failure, not
+  // a fallback (stage_loading.md §1).
+  //
+  // Their *defaults* are derived from the parameters that used to pick the
+  // implementation inside the host factories. An explicitly set value always
+  // wins, and since #10 (M2.5) the Go2 YAMLs set all five explicitly, so the
+  // derivation only still selects for the ULab configs and for out-of-tree
+  // configs written before the schema. See stage_selection.hpp; #23 (M5.4)
+  // drops it together with the legacy keys.
+  this->declare_parameter<std::string>(
+      stage_selection::kGaitSequencerTypeKey,
+      stage_selection::GaitSequencerTypeFromLegacy(
+          this->get_parameter(stage_selection::kLegacyGaitSequencerKey).as_string()));
+  this->declare_parameter<std::string>(stage_selection::kMPCTypeKey, stage_selection::kAcadosMPCPlugin);
+  this->declare_parameter<std::string>(stage_selection::kSwingLegControllerTypeKey,
+                                       stage_selection::kBezierSwingPlugin);
+  this->declare_parameter<std::string>(stage_selection::kWBCTypeKey, stage_selection::WBCTypeForBuild(USE_WBC));
+  this->declare_parameter<std::string>(
+      stage_selection::kModelAdaptationTypeKey,
+      stage_selection::ModelAdaptationTypeFromLegacy(
+          this->get_parameter(stage_selection::kLegacyModelAdaptationModeKey).as_int()));
+  // The contact stage has no legacy selector to derive from: until #12 (M3.1)
+  // there was no contact stage to select, only inline host code.
+  this->declare_parameter<std::string>(stage_selection::kContactLogicTypeKey,
+                                       stage_selection::kDefaultContactLogicPlugin);
+
   on_setparam_callback_handler_ =
       this->add_on_set_parameters_callback([](const std::vector<rclcpp::Parameter> &params) {
         rcl_interfaces::msg::SetParametersResult res;
         for (auto &param : params) {
           if (param.get_name().find("mpc_state_weights") != std::string::npos
-              and param.as_double_array().size() != (MPC::STATE_SIZE - 1)) {
+              and param.as_double_array().size() != (MPC_STATE_SIZE - 1)) {
             res.successful = false;
             res.reason = "MPC state weight vector has wrong size";
             return res;
@@ -311,86 +366,71 @@ MITController::MITController(const std::string &nodeName)
                                                                                                         &param_event) {
     bool gait_update = false;
     for (const auto &param : param_event.changed_parameters) {
-      if (param.name.find("gait") != std::string::npos) {
-        if ((param.name.find("adaptive_gait_sequencer.gait") != std::string::npos)
-            && (dynamic_cast<AdaptiveGaitSequencer *>(gs_.get()))) {
-          auto ad_gs = dynamic_cast<AdaptiveGaitSequencer *>(gs_.get());
-          AdaptiveGait &gait = ad_gs->Gait();
-          if (param.name == "adaptive_gait_sequencer.gait.phase_offset") {
-            auto po = this->get_parameter("adaptive_gait_sequencer.gait.phase_offset").as_double_array();
-            gait.set_offset(to_array<N_LEGS>(po));
-          } else if (param.name == "adaptive_gait_sequencer.gait.swing_time") {
-            gait.set_swing_time(this->get_parameter("adaptive_gait_sequencer.gait.swing_time").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.filter_size") {
-            gait.set_filter_size(this->get_parameter("adaptive_gait_sequencer.gait.filter_size").as_int());
-          } else if (param.name == "adaptive_gait_sequencer.gait.zero_velocity_threshold") {
-            gait.set_zero_velocity_threshold(
-                this->get_parameter("adaptive_gait_sequencer.gait.zero_velocity_threshold").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.switch_offsets") {
-            gait.set_offset_switch(this->get_parameter("adaptive_gait_sequencer.gait.switch_offsets").as_bool());
-          } else if (param.name == "adaptive_gait_sequencer.gait.gait_change_froude") {
-            gait.set_gait_change_froude(
-                to_array<2>(this->get_parameter("adaptive_gait_sequencer.gait.gait_change_froude").as_double_array()));
-          } else if (param.name == "adaptive_gait_sequencer.gait.standing_foot_position_threshold") {
-            gait.set_standing_foot_position_threshold(
-                this->get_parameter("adaptive_gait_sequencer.gait.standing_foot_position_threshold").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.min_v_cmd_factor") {
-            gait.set_min_v_cmd_factor(this->get_parameter("adaptive_gait_sequencer.gait.min_v_cmd_factor").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.max_correction_cycles") {
-            gait.set_max_correction_cycles(
-                this->get_parameter("adaptive_gait_sequencer.gait.max_correction_cycles").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.correct_all") {
-            gait.set_correct_all(this->get_parameter("adaptive_gait_sequencer.gait.correct_all").as_bool());
-          } else if (param.name == "adaptive_gait_sequencer.gait.correction_period") {
-            gait.set_correction_period(
-                this->get_parameter("adaptive_gait_sequencer.gait.correction_period").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.disturbance_correction") {
-            gait.set_disturbance_correction(
-                this->get_parameter("adaptive_gait_sequencer.gait.disturbance_correction").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.min_v") {
-            gait.set_min_v(this->get_parameter("adaptive_gait_sequencer.gait.min_v").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.offset_delay") {
-            gait.set_offset_delay(this->get_parameter("adaptive_gait_sequencer.gait.offset_delay").as_double());
-          } else if (param.name == "adaptive_gait_sequencer.gait.max_stride_length") {
-            gait.set_max_stride_length(
-                this->get_parameter("adaptive_gait_sequencer.gait.max_stride_length").as_double());
-          }
-        } else {
+      // The host is a pure router: it hands each changed parameter to the owning stage through the
+      // SetParameter contract (issue #2) and never needs the concrete stage type. A stage returning
+      // false means it did not recognise the key; the host then warns, or for gait parameters falls
+      // back to reloading the gait sequencer from scratch (the previous behaviour).
+      if (param.name == stage_selection::kLegacyGaitSequencerKey) {
+        // The legacy bridge derives gs.type from gait_sequencer at declare time
+        // (stage_selection.hpp); a runtime change of the legacy key must re-derive it, or the
+        // reload below resolves the startup value of gs.type and rebuilds the sequencer that is
+        // already running instead of the newly selected one. Since #10 (M2.5) moved
+        // joy_to_target onto gs.type, nothing in this repository takes this branch; it stays for
+        // out-of-tree callers that still set the legacy key, until #23 (M5.4) removes both.
+        this->set_parameter(rclcpp::Parameter(
+            stage_selection::kGaitSequencerTypeKey,
+            stage_selection::GaitSequencerTypeFromLegacy(param.value.string_value)));
+        gait_update = true;
+      } else if (param.name == stage_selection::kGaitSequencerTypeKey) {
+        // The new spelling switches the sequencer directly. The set_parameter above re-enters
+        // this callback with a gs.type event; comparing against what is actually loaded turns
+        // that echo into a no-op instead of a second rebuild.
+        if (param.value.string_value != loaded_gs_type_) {
           gait_update = true;
         }
-      } else if (param.name == "mpc_state_weights_stand") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc state weights stand");
-        mpc_lock_.lock();
-        state_weights_stand_ =
-            Eigen::Map<const Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1>>(param.value.double_array_value.data());
-        if (last_gait_sequence_mode_ == GaitSequence::KEEP) {
-          reinterpret_cast<MPC *>(mpc_.get())->SetStateWeights(state_weights_stand_);
+      } else if (param.name.rfind("contact_logic.", 0) == 0) {
+        // The contact stage's own keys. Routed under wbc_lock_, the lock the
+        // stage runs under (contact_logic_interface.hpp). `contact_logic.type`
+        // lands here too and is correctly refused: swapping a running stage is
+        // the gait sequencer's special case, not a general capability.
+        std::lock_guard<std::mutex> lock(wbc_lock_);
+        if (!contact_logic_->SetParameter(param.name, rclcpp::ParameterValue(param.value))) {
+          RCLCPP_WARN(this->get_logger(), "Changing parameter %s is not yet suported", param.name.c_str());
+          continue;
         }
-        mpc_lock_.unlock();
-      } else if (param.name == "mpc_state_weights_move") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc state weights move");
-        mpc_lock_.lock();
-        state_weights_move_ =
-            Eigen::Map<const Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1>>(param.value.double_array_value.data());
-        if (last_gait_sequence_mode_ == GaitSequence::MOVE) {
-          reinterpret_cast<MPC *>(mpc_.get())->SetStateWeights(state_weights_move_);
+      } else if (stage_selection::ContactLogicKeyFromLegacy(param.name) != nullptr) {
+        // A config still using the pre-M3.1 flat spelling. Re-set the ratified
+        // key, which re-enters this callback and takes the branch above; no echo
+        // suppression is needed, because that branch only forwards the value to
+        // the stage and does so idempotently. #23 (M5.4) removes this branch.
+        this->set_parameter(rclcpp::Parameter(stage_selection::ContactLogicKeyFromLegacy(param.name),
+                                              rclcpp::ParameterValue(param.value)));
+      } else if (param.name.find("gait") != std::string::npos) {
+        gait_sequencer_lock_.lock();
+        bool applied = gs_->SetParameter(param.name, rclcpp::ParameterValue(param.value));
+        gait_sequencer_lock_.unlock();
+        if (!applied) {
+          gait_update = true;
         }
-        mpc_lock_.unlock();
-      } else if (param.name == "mpc_alpha") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc input weights");
-        mpc_lock_.lock();
-        reinterpret_cast<MPC *>(mpc_.get())->SetInputWeights(param.value.double_value);
-        mpc_lock_.unlock();
-      } else if (param.name == "mpc_fmax") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc fmax");
-        mpc_lock_.lock();
-        reinterpret_cast<MPC *>(mpc_.get())->SetFmax(param.value.double_value);
-        mpc_lock_.unlock();
-      } else if (param.name == "mpc_mu") {
-        RCLCPP_INFO(this->get_logger(), "Updating mpc mu");
-        mpc_lock_.lock();
-        reinterpret_cast<MPC *>(mpc_.get())->SetMu(param.value.double_value);
-        mpc_lock_.unlock();
+      } else if (param.name.rfind("mpc_", 0) == 0) {
+        std::lock_guard<std::mutex> lock(mpc_lock_);
+        if (!mpc_->SetParameter(param.name, rclcpp::ParameterValue(param.value))) {
+          RCLCPP_WARN(this->get_logger(), "Changing parameter %s is not yet suported", param.name.c_str());
+          continue;
+        }
+      } else if (param.name.rfind("slc_", 0) == 0
+                 || param.name == "maximum_swing_leg_progress_to_update_target") {
+        std::lock_guard<std::mutex> lock(slc_lock_);
+        if (!slc_->SetParameter(param.name, rclcpp::ParameterValue(param.value))) {
+          RCLCPP_WARN(this->get_logger(), "Changing parameter %s is not yet suported", param.name.c_str());
+          continue;
+        }
+      } else if (param.name.rfind("wbc.", 0) == 0) {
+        std::lock_guard<std::mutex> lock(wbc_lock_);
+        if (!wbc_->SetParameter(param.name, rclcpp::ParameterValue(param.value))) {
+          RCLCPP_WARN(this->get_logger(), "Changing parameter %s is not yet suported", param.name.c_str());
+          continue;
+        }
       } else if (param.name
                  == "cartesian_joint_control_gains.swing_Kp") {  // TODO: syncronisation, maybe use atomic vars?
         cartesian_joint_control_swing_Kp_ = Eigen::Map<const Eigen::Vector3d>(param.value.double_array_value.data());
@@ -424,53 +464,8 @@ MITController::MITController(const std::string &nodeName)
         cartesian_joint_control_stance_Kp_ = Eigen::Map<const Eigen::Vector3d>(param.value.double_array_value.data());
       } else if (param.name == "cartesian_stiffness_control_gains.stance_Kd") {
         cartesian_joint_control_stance_Kd_ = Eigen::Map<const Eigen::Vector3d>(param.value.double_array_value.data());
-      } else if (param.name == "early_contact_detection") {
-        early_contact_detection_ = param.value.bool_value;
-      } else if (param.name == "late_contact_detection") {
-        late_contact_detection_ = param.value.bool_value;
-      } else if (param.name == "lost_contact_detection") {
-        lost_contact_detection_ = param.value.bool_value;
       } else if (param.name == "use_model_adaptation") {
         use_model_adaptation_ = param.value.bool_value;
-      } else if (param.name == "late_contact_reschedule_swing_phase") {
-        late_contact_reschedule_swing_phase_ = param.value.bool_value;
-      } else if (param.name == "wbc.inverse_dynamics.foot_position_based_on_target_height") {
-        if (typeid(wbc_.get()) == typeid(InverseDynamics)) {
-          wbc_lock_.lock();
-          reinterpret_cast<InverseDynamics *>(wbc_.get())->setFootPositionBasedOnTargetHeight(param.value.bool_value);
-          wbc_lock_.unlock();
-        }
-      } else if (param.name == "wbc.inverse_dynamics.target_velocity_blend") {
-        if (typeid(wbc_.get()) == typeid(InverseDynamics)) {
-          wbc_lock_.lock();
-          reinterpret_cast<InverseDynamics *>(wbc_.get())->setTargetVelocityBlend(param.value.double_value);
-          wbc_lock_.unlock();
-        }
-      } else if (param.name == "wbc.inverse_dynamics.foot_position_based_on_target_orientation") {
-        if (typeid(wbc_.get()) == typeid(InverseDynamics)) {
-          wbc_lock_.lock();
-          reinterpret_cast<InverseDynamics *>(wbc_.get())
-              ->setFootPositionBasedOnTargetOrientation(param.value.bool_value);
-          wbc_lock_.unlock();
-        }
-      } else if (param.name == "slc_swing_height") {
-        slc_lock_.lock();
-        reinterpret_cast<SwingLegController *>(slc_.get())->SetSwingHeight(param.value.double_value);
-        slc_lock_.unlock();
-      } else if (param.name == "slc_world_blend") {
-        slc_lock_.lock();
-        reinterpret_cast<SwingLegController *>(slc_.get())->SetWorldBlend(param.value.double_value);
-        slc_lock_.unlock();
-      } else if (param.name == "wbc.inverse_dynamics.transformation_filter_size") {
-        wbc_lock_.lock();
-        reinterpret_cast<InverseDynamics *>(wbc_.get())
-            ->setFootPositionBasedOnTargetOrientation(param.value.integer_value);
-        wbc_lock_.unlock();
-      } else if (param.name == "maximum_swing_leg_progress_to_update_target") {
-        slc_lock_.lock();
-        reinterpret_cast<SwingLegController *>(slc_.get())
-            ->SetMaximumSwingProgressToUpdateTarget(param.value.double_value);
-        slc_lock_.unlock();
       } else if (param.name == "raibert.z_on_plane") {
         gait_update = true;
       } else if (param.name == "raibert.k") {
@@ -483,27 +478,35 @@ MITController::MITController(const std::string &nodeName)
     }
     if (gait_update) {
       RCLCPP_INFO(this->get_logger(), "Gait related parameter has changed, reloading gait sequencer");
-      quad_state_lock_.lock();
-      auto quad_state = std::make_unique<QuadState>(quad_state_);
-      quad_state_lock_.unlock();
-      auto quad_model = std::make_unique<QuadModelPino>(quad_model_);
-      auto gs = GetGaitSequencerFromParams(std::move(quad_model), std::move(quad_state));
-      if (gs) {
+      // Reconfiguration is *replace*, not re-Init (plugin_lifecycle.md §5): build
+      // and initialise a fresh instance off-loop — the expensive part — then swap
+      // it in under the stage lock and let the old one die after the lock is
+      // released. Same three steps as before this refactor, with the loader in
+      // place of the deleted factory.
+      try {
+        auto fresh = gs_loader_.Load(stage_selection::kGaitSequencerTypeKey, MakeStageInit());
+        fresh->UpdateTarget(target_);  // as at bring-up, before the stage goes live
         gait_sequencer_lock_.lock();
-        gs_ = std::move(gs);
+        gs_.swap(fresh);
         gait_sequencer_lock_.unlock();
+        loaded_gs_type_ = this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string();
+        // `fresh` now holds the previous instance and is destroyed here, outside
+        // the lock, so no control loop waits on the old stage's destructor.
+      } catch (const std::runtime_error &error) {
+        // Unlike bring-up, a failed reload must not take down a walking robot:
+        // keep the running gait sequencer and report loudly. StageLoadError and
+        // StageInitError both derive from std::runtime_error.
+        RCLCPP_ERROR(this->get_logger(),
+                     "Could not reload the gait sequencer, keeping the running one: %s",
+                     error.what());
       }
     }
   });
 
-  // Control parts
-  assert(this->get_parameter("mpc_state_weights_stand").as_double_array().size() == (MPC::STATE_SIZE - 1));
-  assert(this->get_parameter("mpc_state_weights_move").as_double_array().size() == (MPC::STATE_SIZE - 1));
-  state_weights_stand_ = Eigen::Map<const Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1>>(
-      this->get_parameter("mpc_state_weights_stand").as_double_array().data());
-  state_weights_move_ = Eigen::Map<const Eigen::Matrix<double, MPC::STATE_SIZE - 1, 1>>(
-      this->get_parameter("mpc_state_weights_move").as_double_array().data());
-
+  // The mpc_state_weights_* asserts and the two Eigen copies they guarded went
+  // with the MPC construction they fed: the MPC stage checks the vector lengths
+  // itself and refuses to initialise, which reports the same mistake as a named
+  // fatal error rather than as an assert that Release compiles out.
   while (!first_quad_state_received_) {
     RCLCPP_INFO_THROTTLE(this->get_logger(),
                          *this->get_clock(),
@@ -513,122 +516,73 @@ MITController::MITController(const std::string &nodeName)
   }
   RCLCPP_INFO(this->get_logger(), "First quad_state received, initializing controller");
 
-  gs_ = GetGaitSequencerFromParams(std::make_unique<QuadModelPino>(quad_model_),
-                                   std::make_unique<QuadState>(quad_state_));
-  if (!gs_) {
-    RCLCPP_ERROR(this->get_logger(), "Could not load gait sequencer from params");
-    rclcpp::shutdown();
-  }
-
-  auto mpc_solver_name = this->get_parameter("mpc_solver").as_string();
-  ocp_qp_solver_t mpc_solver = PARTIAL_CONDENSING_OSQP;
-  if (mpc_solver_name == "PARTIAL_CONDENSING_HPIPM") {
-    mpc_solver = PARTIAL_CONDENSING_HPIPM;
-  } else if (mpc_solver_name == "PARTIAL_CONDENSING_OSQP") {
-    mpc_solver = PARTIAL_CONDENSING_OSQP;
-  } else if (mpc_solver_name == "FULL_CONDENSING_HPIPM") {
-    mpc_solver = FULL_CONDENSING_HPIPM;
-  } else if (mpc_solver_name == "FULL_CONDENSING_DAQP") {
-    mpc_solver = FULL_CONDENSING_DAQP;
-  } else if (mpc_solver_name == "FULL_CONDENSING_QPOASES") {
-    mpc_solver = FULL_CONDENSING_QPOASES;
-  } else if (mpc_solver_name == "PARTIAL_CONDENSING_QPDUNES") {
-    mpc_solver = PARTIAL_CONDENSING_QPDUNES;
-  } else {
-    RCLCPP_ERROR(this->get_logger(), "Unknown mpc solver: %s", mpc_solver_name.c_str());
-    exit(-1);
-  }
-  mpc_ = std::make_unique<MPC>(this->get_parameter("mpc_alpha").as_double(),
-                               state_weights_stand_,
-                               this->get_parameter("mpc_mu").as_double(),
-                               this->get_parameter("mpc_fmin").as_double(),
-                               this->get_parameter("mpc_fmax").as_double(),
-                               std::make_unique<QuadState>(quad_state_),
-                               std::make_unique<QuadModelPino>(quad_model_),
-                               mpc_solver,
-                               this->get_parameter("mpc_condensed_size").as_int(),
-                               this->get_parameter("mpc_hpipm_mode").as_string(),
-                               this->get_parameter("mpc_warm_start").as_int(),
-                               this->get_parameter("mpc_solver_tolerances").as_double(),
-                               this->get_parameter("mpc_osqp_linsys_solver").as_string());
-
+  // Pipeline stages, loaded through pluginlib (issue #9, M2.4).
+  //
+  // What used to stand here — a gait sequencer factory, an mpc_solver string
+  // switch, a model adaptation switch, an SLC constructor and a WBC-constructing
+  // generic lambda — is now five plugin loads. Each stock plugin's `Init` *is*
+  // the factory body that lived here, moved behind the plugin boundary in M2.3
+  // (src/plugins/*_plugins.cpp), so the pipeline is configured from exactly the
+  // same parameters as before.
+  //
+  // Deliberately unguarded: `Load` throws StageLoadError (no such stage) or
+  // StageInitError (the stage cannot configure itself), both fatal for bring-up
+  // and both naming what went wrong — a loader error even lists the declared
+  // alternatives (stage_loading.md §1). `main` reports the message and exits
+  // non-zero. This replaces the previous mix of "log and rclcpp::shutdown()" and
+  // "log and exit(-1)", and it is the one behaviour the modularity work insists
+  // on: never start a quadruped with a stage nobody asked for.
+  //
+  // The order is the construction order of the code this replaces, and every
+  // stage gets its own StageInit (each takes ownership of a model/state clone).
+  gs_ = gs_loader_.Load(stage_selection::kGaitSequencerTypeKey, MakeStageInit());
+  loaded_gs_type_ = this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string();
+  mpc_ = mpc_loader_.Load(stage_selection::kMPCTypeKey, MakeStageInit());
   gs_->UpdateTarget(target_);
-  Eigen::Vector<double, ModelAdaptationInterface::NUM_PARAMS> conv_thresh =
-      Eigen::Map<const Eigen::Vector<double, ModelAdaptationInterface::NUM_PARAMS>>(
-          this->get_parameter("ma_convergence_threshold").as_double_array().data());
-  switch (this->get_parameter("ma_mode").as_int()) {
-    case 1:
-      RCLCPP_INFO(this->get_logger(), "Choosing Recursive Least Squares for Model Adaptation");
-      ma_ = std::make_unique<LeastSquaresModelAdaptation>(
-          std::make_unique<QuadModelPino>(quad_model_),
-          std::make_unique<QuadState>(quad_state_),
-          conv_thresh.setZero(),  // Estimation covariance is not thresholdable here
-          this->get_parameter("ma_forgetting_factor").as_double());
-      break;
-    default: {
-      RCLCPP_INFO(this->get_logger(), "Choosing Kalman Filter for Model Adaptation");
+  // The model adaptation stage is always loaded, exactly as it was always
+  // constructed; `use_model_adaptation_` still decides whether its loop does
+  // anything.
+  ma_ = ma_loader_.Load(stage_selection::kModelAdaptationTypeKey, MakeStageInit());
+  slc_ = slc_loader_.Load(stage_selection::kSwingLegControllerTypeKey, MakeStageInit());
+  wbc_ = wbc_loader_.Load(stage_selection::kWBCTypeKey, MakeStageInit());
+  ValidateWBCCommandMode();
+  // The contact stage is loaded last: it sits between the SLC and the WBC in the
+  // control loop, and unlike the other five it replaces host code rather than a
+  // host factory, so it has no construction order to preserve.
+  contact_logic_ = contact_logic_loader_.Load(stage_selection::kContactLogicTypeKey, MakeStageInit());
+  RCLCPP_INFO(this->get_logger(),
+              "Pipeline stages loaded: gait sequencer [%s], mpc [%s], swing leg controller [%s], wbc [%s], "
+              "model adaptation [%s], contact logic [%s]",
+              this->get_parameter(stage_selection::kGaitSequencerTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kMPCTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kSwingLegControllerTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kWBCTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kModelAdaptationTypeKey).as_string().c_str(),
+              this->get_parameter(stage_selection::kContactLogicTypeKey).as_string().c_str());
 
-      Eigen::Matrix<double, ModelAdaptationInterface::NUM_PARAMS, ModelAdaptationInterface::NUM_PARAMS> process_noise;
-      process_noise.setIdentity();
-      process_noise.diagonal() = Eigen::Map<const Eigen::Vector<double, ModelAdaptationInterface::NUM_PARAMS>>(
-          this->get_parameter("ma_process_noise").as_double_array().data());
-      Eigen::Matrix<double, 6, 6> measurement_noise;  // 0.1, 0.25, 0.25
-      measurement_noise.setIdentity();
-      measurement_noise.diagonal() = Eigen::Map<const Eigen::Vector<double, 6>>(
-          this->get_parameter("ma_measurement_noise").as_double_array().data());
-
-      ma_ = std::make_unique<KFModelAdaptation>(std::make_unique<QuadModelPino>(quad_model_),
-                                                std::make_unique<QuadState>(quad_state_),
-                                                process_noise,
-                                                measurement_noise,
-                                                9.81,
-                                                conv_thresh);
-      break;
-    }
-  }
-
-  slc_ = std::make_unique<SwingLegController>(
-      this->get_parameter("slc_swing_height").as_double(),
-      this->get_parameter("maximum_swing_leg_progress_to_update_target").as_double(),
-      this->get_parameter("slc_world_blend").as_double(),
-      std::make_unique<QuadModelPino>(quad_model_),
-      std::make_unique<QuadState>(quad_state_));
-
-  WBCType *wbc_ptr;
-
-  if constexpr (USE_WBC) {
-    std::string wbc_solver_name;
-    std::string wbc_scene_name;
-    wbc_solver_name = this->get_parameter("wbc.arc_opt.solver").as_string();
-    wbc_scene_name = this->get_parameter("wbc.arc_opt.scene").as_string();
-    wbc_ptr = reinterpret_cast<WBCType *>(new WBCArcOPT(
-        std::make_unique<QuadState>(quad_state_),
-        wbc_solver_name,
-        wbc_scene_name,
-        this->get_parameter("wbc.arc_opt.model_urdf").as_string(),
-        to_array<ModelInterface::N_LEGS>(this->get_parameter("wbc.arc_opt.feet_names").as_string_array()),
-        to_array<ModelInterface::NUM_JOINTS>(this->get_parameter("wbc.arc_opt.joint_names").as_string_array()),
-        this->get_parameter("wbc.arc_opt.mu").as_double(),
-        as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_weight").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.foot_pose_weight").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.foot_force_weight").as_double_array()),
-        as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_Kp").as_double_array()),
-        as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_Kd").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_Kp").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_Kd").as_double_array()),
-        as_eigen_vector<6>(this->get_parameter("wbc.arc_opt.com_pose_saturation").as_double_array()),
-        as_eigen_vector<3>(this->get_parameter("wbc.arc_opt.feet_pose_saturation").as_double_array()),
-        this->get_parameter("wbc_solver_tolerances").as_double()));
-  } else {
-    wbc_ptr = reinterpret_cast<WBCType *>(new InverseDynamics(
-        std::make_unique<QuadModelPino>(quad_model_),
-        std::make_unique<QuadState>(quad_state_),
-        this->get_parameter("wbc.inverse_dynamics.foot_position_based_on_target_height").as_bool(),
-        this->get_parameter("wbc.inverse_dynamics.foot_position_based_on_target_orientation").as_bool(),
-        this->get_parameter("wbc.inverse_dynamics.transformation_filter_size").as_int(),
-        this->get_parameter("wbc.inverse_dynamics.target_velocity_blend").as_double()));
-  }
-  wbc_ = std::unique_ptr<WBCType>(wbc_ptr);
+  // Who receives the model when the model adaptation changes it (issue #15,
+  // M3.4). This block *is* the fan-out that used to be written out by hand in
+  // ModelAdaptationCallback; registration order and lock grouping reproduce it
+  // exactly — MPC and GS under mpc_lock_, WBC and the contact stage under
+  // wbc_lock_, SLC under slc_lock_, in that order, and the names are the ones
+  // the three log lines there already printed.
+  //
+  // GS is registered under mpc_lock_ rather than gait_sequencer_lock_ because
+  // that is where it ran before, not because it belongs there: that is gap G6
+  // (stage_contracts.md §7), which pipeline_host.md §8 keeps as a change of its
+  // own so that this one stays reviewable as "same behaviour, different owner
+  // of the list". Fixing it is now editing one argument on one line, here,
+  // instead of surgery inside a callback.
+  //
+  // The model adaptation itself is the producer and is deliberately absent — it
+  // is handed the model by DoModelAdaptation. Adding a stage to the pipeline
+  // means adding one line here and nothing else; see
+  // doc/modularity/model_update_broadcast.md.
+  model_update_broadcast_.Register("MPC", mpc_lock_, mpc_);
+  model_update_broadcast_.Register("GS", mpc_lock_, gs_);
+  model_update_broadcast_.Register("WBC", wbc_lock_, wbc_);
+  model_update_broadcast_.Register("contact logic", wbc_lock_, contact_logic_);
+  model_update_broadcast_.Register("SLC", slc_lock_, slc_);
 
   // Now change modus of le driver acording to this controller
   // comment next paragraph if you want to use controller on bag data
@@ -672,121 +626,62 @@ void MITController::QuadStateUpdateCallback(interfaces::msg::QuadState::SharedPt
   quad_state_ = *quad_state_msg;
   quad_state_lock_.unlock();
 }
-std::unique_ptr<GaitSequencerInterface> MITController::GetGaitSequencerFromParams(
-    std::unique_ptr<ModelInterface> model, std::unique_ptr<StateInterface> state) const {
-  assert(this->get_parameter("gs_shoulder_positions").as_double_array().size() == (N_LEGS * 3));
-  const std::string gait_sequencer = this->get_parameter("gait_sequencer").as_string();
+StageInit MITController::MakeStageInit() {
+  StageInit init;
+  // Model and state clones the stage takes ownership of — the same constructor
+  // injection the concrete stages always had (stage_contracts.md §3). Callers
+  // reach this only after the first /quad_state has arrived, so both are valid
+  // snapshots.
+  init.model = std::make_unique<QuadModelPino>(quad_model_);
+  quad_state_lock_.lock();
+  init.state = std::make_unique<QuadState>(quad_state_);
+  quad_state_lock_.unlock();
 
-  if (gait_sequencer == "Simple") {
-    RCLCPP_INFO(this->get_logger(), "Creating simple gait sequencer");
-    std::string gait_str = this->get_parameter("simple_gait_sequencer.gait").as_string();
-    Gait gait = GaitDatabase::getGait(GaitDatabase::STAND, MPC_DT);  // Default is STAND
-    if (gait_str == "Manual" or gait_str == "MANUAL") {
-      auto df = this->get_parameter("simple_gait_sequencer.manual_gait.duty_factor").as_double_array();
-      auto po = this->get_parameter("simple_gait_sequencer.manual_gait.phase_offset").as_double_array();
-      if (df.size() != N_LEGS or po.size() != N_LEGS) {
-        RCLCPP_ERROR(this->get_logger(), "manual gait parameters have wrong length");
-        return nullptr;
-      }
-      gait = Gait(this->get_parameter("simple_gait_sequencer.manual_gait.period").as_double(),
-                  to_array<N_LEGS>(df),
-                  to_array<N_LEGS>(po),
-                  MPC_DT);
-    } else if (gait_str == "STAND") {
-      gait = GaitDatabase::getGait(GaitDatabase::STAND, MPC_DT);
-    } else if (gait_str == "STATIC_WALK") {
-      gait = GaitDatabase::getGait(GaitDatabase::STATIC_WALK, MPC_DT);
-    } else if (gait_str == "WALKING_TROT") {
-      gait = GaitDatabase::getGait(GaitDatabase::WALKING_TROT, MPC_DT);
-    } else if (gait_str == "TROT") {
-      gait = GaitDatabase::getGait(GaitDatabase::TROT, MPC_DT);
-    } else if (gait_str == "FLYING_TROT") {
-      gait = GaitDatabase::getGait(GaitDatabase::FLYING_TROT, MPC_DT);
-    } else if (gait_str == "PACE") {
-      gait = GaitDatabase::getGait(GaitDatabase::PACE, MPC_DT);
-    } else if (gait_str == "BOUND") {
-      gait = GaitDatabase::getGait(GaitDatabase::BOUND, MPC_DT);
-    } else if (gait_str == "ROTARY_GALLOP") {
-      gait = GaitDatabase::getGait(GaitDatabase::ROTARY_GALLOP, MPC_DT);
-    } else if (gait_str == "TRAVERSE_GALLOP") {
-      gait = GaitDatabase::getGait(GaitDatabase::TRAVERSE_GALLOP, MPC_DT);
-    } else if (gait_str == "PRONK") {
-      gait = GaitDatabase::getGait(GaitDatabase::PRONK, MPC_DT);
-    } else {
-      RCLCPP_ERROR(this->get_logger(), "Unknown gait type [%s]", gait_str.c_str());
-      return nullptr;
-    }
-    RCLCPP_INFO(this->get_logger(), "Create gait of type [%s]", gait_str.c_str());
-
-    return std::make_unique<SimpleGaitSequencer>(
-        gait,
-        this->get_parameter("raibert.k").as_double(),
-        std::array<const Eigen::Vector3d, N_LEGS>{
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 3),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 6),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 9)},
-        std::move(state),
-        std::move(model),
-        this->get_parameter("raibert.filtersize").as_int(),
-        this->get_parameter("raibert.z_on_plane").as_bool(),
-        this->get_parameter("fix_standing_position").as_bool(),
-        this->get_parameter("fix_position_distance_threshold").as_double(),
-        this->get_parameter("fix_position_angular_threshold").as_double(),
-        this->get_parameter("fix_position_velocity_threshold").as_double(),
-        early_contact_detection_);
-
-  } else if (gait_sequencer == "Adaptive") {
-    RCLCPP_INFO(this->get_logger(), "Creating adaptive gait sequencer");
-    auto po = this->get_parameter("adaptive_gait_sequencer.gait.phase_offset").as_double_array();
-    if (po.size() != N_LEGS) {
-      RCLCPP_ERROR(this->get_logger(), "manual gait parameters have wrong length");
-      return nullptr;
-    }
-    return std::make_unique<AdaptiveGaitSequencer>(
-        AdaptiveGait(
-            to_array<N_LEGS>(po),
-            MPC_DT,
-            this->get_parameter("adaptive_gait_sequencer.gait.swing_time").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.filter_size").as_int(),
-            this->get_parameter("adaptive_gait_sequencer.gait.zero_velocity_threshold").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.switch_offsets").as_bool(),
-            to_array<2>(this->get_parameter("adaptive_gait_sequencer.gait.gait_change_froude").as_double_array()),
-            this->get_parameter("adaptive_gait_sequencer.gait.standing_foot_position_threshold").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.min_v_cmd_factor").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.max_correction_cycles").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.correct_all").as_bool(),
-            this->get_parameter("adaptive_gait_sequencer.gait.correction_period").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.disturbance_correction").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.min_v").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.offset_delay").as_double(),
-            this->get_parameter("adaptive_gait_sequencer.gait.max_stride_length").as_double()),
-        this->get_parameter("raibert.k").as_double(),
-        std::array<const Eigen::Vector3d, N_LEGS>{
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 3),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 6),
-            Eigen::Map<const Eigen::Vector3d>(this->get_parameter("gs_shoulder_positions").as_double_array().data()
-                                              + 9)},
-        std::move(state),
-        std::move(model),
-        this->get_parameter("raibert.filtersize").as_int(),
-        this->get_parameter("raibert.z_on_plane").as_bool(),
-        this->get_parameter("fix_standing_position").as_bool(),
-        this->get_parameter("fix_position_distance_threshold").as_double(),
-        this->get_parameter("fix_position_angular_threshold").as_double(),
-        this->get_parameter("fix_position_velocity_threshold").as_double(),
-        early_contact_detection_);
-
-  } else {
-    RCLCPP_ERROR(this->get_logger(), "Unknown gait sequencer type [%s]", gait_sequencer.c_str());
-    return nullptr;
+  // The node's whole parameter set, flattened to name -> value. Every stage gets
+  // the same map and reads the keys it documents (plugin_lifecycle.md §3), which
+  // is what keeps the host out of the business of knowing which parameter belongs
+  // to which algorithm.
+  const auto parameter_names =
+      this->list_parameters({}, rcl_interfaces::srv::ListParameters::Request::DEPTH_RECURSIVE).names;
+  for (const auto &name : parameter_names) {
+    init.params.emplace(name, this->get_parameter(name).get_parameter_value());
   }
+  return init;
+}
+
+// The `leg_control_mode` vocabulary `stage_selection::WBCCommandModeForLegControlMode` is written
+// against. It takes the raw parameter value so it stays testable without a node, which only works
+// while these agree.
+static_assert(static_cast<int>(MITController::JOINT_CONTROL) == 0);
+static_assert(static_cast<int>(MITController::JOINT_TORQUE_CONTROL) == 1);
+static_assert(static_cast<int>(MITController::CARTESIAN_STIFFNESS_CONTROL) == 2);
+static_assert(static_cast<int>(MITController::CARTESIAN_JOINT_CONTROL) == 3);
+
+void MITController::ValidateWBCCommandMode() {
+  const int64_t leg_control_mode = static_cast<int64_t>(leg_control_mode_);
+  const std::optional<WBCCommandMode> required_mode =
+      stage_selection::WBCCommandModeForLegControlMode(leg_control_mode);
+  if (!required_mode.has_value()) {
+    throw StageLoadError("leg_control_mode " + std::to_string(leg_control_mode)
+                         + " is not a control mode; expected 0 (joint), 1 (joint torque), 2 (cartesian "
+                           "stiffness) or 3 (cartesian joint)");
+  }
+  if (wbc_->SupportedCommandMode() == *required_mode) {
+    return;
+  }
+  // Both are launch-time choices now (#13, M3.2), so nothing but this check stops them disagreeing.
+  // Refuse to start rather than run: a WBC that cannot fill the command message this mode publishes
+  // would leave the loop producing nothing every cycle, which on hardware is a robot that has been
+  // commanded and is not being driven. Name both parameters and the fix, like StageLoader's errors
+  // (stage_loading.md §1).
+  const bool needs_cartesian = *required_mode == WBCCommandMode::kCartesian;
+  throw StageLoadError(
+      "stage '" + this->get_parameter(stage_selection::kWBCTypeKey).as_string() + "' (selected by '"
+      + std::string(stage_selection::kWBCTypeKey) + "') produces "
+      + (needs_cartesian ? "joint" : "cartesian") + " commands, but leg_control_mode "
+      + std::to_string(leg_control_mode) + " needs " + (needs_cartesian ? "cartesian" : "joint")
+      + " commands; either set '" + std::string(stage_selection::kWBCTypeKey) + "' to '"
+      + stage_selection::WBCPluginsForCommandMode(*required_mode) + "' or change leg_control_mode");
 }
 
 void MITController::QuadControlTargetUpdateCallback(interfaces::msg::QuadControlTarget::SharedPtr quad_target_msg) {
@@ -817,24 +712,11 @@ void MITController::MPCLoopCallback() {
   gs_->GetGaitSequence(gait_sequence_temp);
   mpc_->UpdateGaitSequence(gait_sequence_temp);
 
-  if (last_gait_sequence_mode_ != gait_sequence_temp.sequence_mode) {
-    RCLCPP_DEBUG(this->get_logger(), "Changing MPC weights because sequence mode changed");
-    switch (gait_sequence_temp.sequence_mode) {
-      case GaitSequence::KEEP:
-        reinterpret_cast<MPC *>(mpc_.get())->SetStateWeights(state_weights_stand_);
-        if (PUBLISH_HEARTBEAT) {
-          controller_heartbeat_.keep_pose_active = true;
-        }
-        break;  // TODO: this and next might have internal doubled
-                // operations with target set
-      case GaitSequence::MOVE:
-        reinterpret_cast<MPC *>(mpc_.get())->SetStateWeights(state_weights_move_);
-        if (PUBLISH_HEARTBEAT) {
-          controller_heartbeat_.keep_pose_active = false;
-        }
-        break;
-    }
-    last_gait_sequence_mode_ = gait_sequence_temp.sequence_mode;
+  // The MPC now switches its own KEEP<->MOVE cost weights inside UpdateGaitSequence (issue #2, gap
+  // G1), so the host no longer reaches into the concrete MPC here. It still mirrors the mode into
+  // the heartbeat for diagnostics.
+  if (PUBLISH_HEARTBEAT) {
+    controller_heartbeat_.keep_pose_active = (gait_sequence_temp.sequence_mode == GaitSequence::KEEP);
   }
 
   static SolverInformation solver_info;
@@ -1009,19 +891,12 @@ void MITController::ModelAdaptationCallback() {
     if (changed_model) {
       RCLCPP_INFO(this->get_logger(), "Model Adaptation changed QuadModel");
       interfaces::msg::QuadModel quad_model_msg;
-      mpc_lock_.lock();
-      mpc_->UpdateModel(quad_model_);
-      gs_->UpdateModel(quad_model_);
-      mpc_lock_.unlock();
-      RCLCPP_INFO(this->get_logger(), "Updated used Model in MPC and GS");
-      wbc_lock_.lock();
-      wbc_->UpdateModel(quad_model_);
-      wbc_lock_.unlock();
-      RCLCPP_INFO(this->get_logger(), "Updated used Model in WBC");
-      slc_lock_.lock();
-      slc_->UpdateModel(quad_model_);
-      slc_lock_.unlock();
-      RCLCPP_INFO(this->get_logger(), "Updated used Model in SLC");
+      // The five UpdateModel calls, three lock/unlock pairs and three log lines
+      // that stood here are now the registration block in the constructor
+      // (issue #15, M3.4): same stages, same order, same locks, same log text —
+      // the difference is that a sixth stage no longer has to be threaded into
+      // this callback by hand.
+      model_update_broadcast_.Broadcast(quad_model_, this->get_logger());
       quad_model_msg.header.stamp = this->get_clock()->now();
       quad_model_msg.mass = quad_model_.GetMass();
       Eigen::Map<Eigen::Vector3d>(quad_model_msg.com.data()) = quad_model_.GetBodyToCOM().vector();
@@ -1077,130 +952,56 @@ void MITController::ControlLoopCallback() {
                      mpc_prediction_temp.linear_velocity[1],
                      mpc_prediction_temp.angular_velocity[1]);  // TODO: take MPC first prediction here?
 
+  // Contact reconciliation (issue #12, M3.1). The per-leg early/late/lost contact
+  // FSM that used to be two switch statements right here is the sixth pipeline
+  // stage now; the host feeds it, calls it once, and reacts to what it reports.
+  contact_logic_->UpdateState(quad_state_temp);
+  contact_logic_->UpdateGaitSequence(gait_sequence_temp);
+  contact_logic_->UpdateWrenchSequence(wrench_sequence_temp);
+  contact_logic_->UpdateSwingLegState(feet_targets_temp, feet_swing_progress_temp, feet_swing_states_temp);
+
   // Prepare for WBC
   auto wrenches = wrench_sequence_temp.forces[0];
   auto feet_targets = feet_targets_temp;
   auto gait = gait_sequence_temp.contact_sequence[0];
 
-  // Update leg status
-  for (unsigned int leg_idx = 0; leg_idx < N_LEGS; leg_idx++) {
-    switch (feet_status_[leg_idx]) {
-      case LOST_CONTACT:
-        [[fallthrough]];
-      case LATE_CONTACT:
-        // Leave it in slipped and override anything until it gets contact again
-        // or do the late contact movement until it gets contact again and ignore any planned stance
-        if (quad_state_temp.GetFeetContacts()[leg_idx] and gait[leg_idx]) {
-          // Regaining contact and schedule stance phase
-          feet_status_[leg_idx] = STANCE;
-        } else if (quad_state_temp.GetFeetContacts()[leg_idx] and !gait[leg_idx]) {
-          // Regaining contact and scheduled flight phase
-          feet_status_[leg_idx] = SWING;
-        } else if (late_contact_reschedule_swing_phase_ and !gait[leg_idx])
-        // Special feature to reschedule swing phase even if late contact (sometimes
-        // legs are not properly touching the ground)
-        {
-          feet_status_[leg_idx] = SWING;
-        }
-        // Otherwise stay in that phase
-        break;
-      case EARLY_CONTACT:
-        // Wait for scheduling to react to early contact
-        if (gait[leg_idx]) {
-          feet_status_[leg_idx] = STANCE;
-        }
-        break;
-      case SWING:
-        // Check for early or late contact:
-        if (early_contact_detection_ and !gait[leg_idx] and quad_state_temp.GetFeetContacts()[leg_idx]
-            and feet_swing_progress_temp[leg_idx] > 0.5) {  // Early contact
-          feet_status_[leg_idx] = EARLY_CONTACT;
-          early_contact_hold_position_[leg_idx] = quad_model_.CalcFootPositionInWorld(leg_idx, quad_state_temp);
-          RCLCPP_INFO(this->get_logger(), "Foot [%d] has early contact", leg_idx);
-          if (PUBLISH_HEARTBEAT) {
-            controller_heartbeat_.num_early_contacts++;
-          }
-        } else if (late_contact_detection_ and gait[leg_idx] and !quad_state_temp.GetFeetContacts()[leg_idx]) {
-          feet_status_[leg_idx] = LATE_CONTACT;
-          slip_hold_in_body_[leg_idx] = quad_model_.CalcFootPositionInBodyFrame(
-              leg_idx, Eigen::Map<const Eigen::Vector3d>(quad_state_temp.GetJointPositions()[leg_idx].data()));
-          RCLCPP_INFO(this->get_logger(), "Foot [%d] has late contact", leg_idx);
-        } else if (gait[leg_idx]) {
-          feet_status_[leg_idx] = STANCE;  // rare case but this is the ideal one
-        }
-        break;
-      case STANCE:
-        // Check if flight phase scheduled or slip detected
-        if (!gait[leg_idx]) {
-          feet_status_[leg_idx] = SWING;  // Swing scheduled so going to swing phase
-        } else if (lost_contact_detection_ and gait[leg_idx] and !quad_state_temp.GetFeetContacts()[leg_idx]) {
-          feet_status_[leg_idx] = LOST_CONTACT;  // Slip detected going to slip
-          slip_hold_in_body_[leg_idx] = quad_model_.CalcFootPositionInBodyFrame(
-              leg_idx, Eigen::Map<const Eigen::Vector3d>(quad_state_temp.GetJointPositions()[leg_idx].data()));
-          RCLCPP_WARN(this->get_logger(),
-                      "Foot [%d] lost contact and is kept a last contact position relative to body",
-                      leg_idx);
-        }
-        break;
-    }
-  }
+  // Reconcile the plan with what the feet actually sense. In/out: the three
+  // objects seeded above are the stage's inputs and, on return, the WBC's.
+  // Exactly once per cycle — this is the only stage method that mutates state.
+  contact_logic_->Reconcile(gait, wrenches, feet_targets);
 
-  //  RCLCPP_WARN_THROTTLE(
-  //      this->get_logger(), this->get_clock(), 1.0, "Leg [%d] slipped, keeping position until it gets contact");
-  // Apply leg commands
+  // The logging and the heartbeat counter stayed here: they are host concerns,
+  // and keeping them out of the stage is what lets it be a plain algorithm with
+  // no logger and no message dependency. The messages and their severities are
+  // the ones the inline code emitted, on the same cycles.
+  static ContactLogicInterface::ContactEvents contact_events;
+  contact_logic_->GetContactEvents(contact_events);
   for (unsigned int leg_idx = 0; leg_idx < N_LEGS; leg_idx++) {
-    switch (feet_status_[leg_idx]) {
-      case STANCE: {
-        last_feet_pos_targets_[leg_idx] = gait_sequence_temp.foot_position_sequence[0][leg_idx];
-        feet_targets.positions[leg_idx] = gait_sequence_temp.foot_position_sequence[0][leg_idx];
-        feet_targets.velocities[leg_idx].setZero();
-        feet_targets.accelerations[leg_idx].setZero();
-      } break;
-      case SWING: {
-        wrenches[leg_idx].setZero();
-        // feet targets stay the same
-        if ((feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::STANCE)
-            or (feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED)) {
-          // take last feet targets for now
-          feet_targets.velocities[leg_idx].setZero();
-          feet_targets.accelerations[leg_idx].setZero();
-          feet_targets.positions[leg_idx] = last_feet_pos_targets_[leg_idx];
-          RCLCPP_ERROR_EXPRESSION(this->get_logger(),
-                                  feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED,
-                                  "Controll loop reached Swing phase for foot [%d], but SLC is still in stance",
-                                  leg_idx);
-          RCLCPP_WARN_EXPRESSION(this->get_logger(),
-                                 feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED,
-                                 "Controll loop reached Swing phase for foot [%d], but SLC has not yet started",
-                                 leg_idx);
-        }
-      } break;
-      case EARLY_CONTACT: {
-        gait[leg_idx] = true;
-        feet_targets.velocities[leg_idx].setZero();
-        feet_targets.accelerations[leg_idx].setZero();
-        feet_targets.positions[leg_idx] = early_contact_hold_position_[leg_idx];
-        // Next stance phase targets have to be transformed to current pose
-        int next_stance_indx = int(gait_sequence_temp.swing_time_sequence[0][leg_idx] / MPC_DT) + 1;
-        assert(gait_sequence_temp.contact_sequence[next_stance_indx][leg_idx] == true);
-        wrenches[leg_idx] = quad_state_temp.GetOrientationInWorld()
-                            * gait_sequence_temp.reference_trajectory_orientation[next_stance_indx].inverse()
-                            * wrench_sequence_temp.forces[next_stance_indx][leg_idx];
-      } break;
-      case LOST_CONTACT: {
-        // Keep foot on lost position
-        // same behaviour as LATE_CONTACT for now
-        [[fallthrough]];
+    if (contact_events.early_contact_detected[leg_idx]) {
+      RCLCPP_INFO(this->get_logger(), "Foot [%d] has early contact", leg_idx);
+      if (PUBLISH_HEARTBEAT) {
+        controller_heartbeat_.num_early_contacts++;
       }
-      case LATE_CONTACT: {
-        gait[leg_idx] = false;
-        feet_targets.velocities[leg_idx].setZero();
-        feet_targets.accelerations[leg_idx].setZero();
-        feet_targets.positions[leg_idx] = Eigen::Translation3d(quad_state_.GetPositionInWorld())
-                                          * quad_state_.GetOrientationInWorld()
-                                          * slip_hold_in_body_[leg_idx];  // Transformed to world
-        wrenches[leg_idx].setZero();
-      } break;
+    }
+    if (contact_events.late_contact_detected[leg_idx]) {
+      RCLCPP_INFO(this->get_logger(), "Foot [%d] has late contact", leg_idx);
+    }
+    if (contact_events.lost_contact_detected[leg_idx]) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Foot [%d] lost contact and is kept a last contact position relative to body",
+                  leg_idx);
+    }
+    // The event covers both SLC states that mean "not swinging yet"; these two
+    // messages only ever fired for NOT_STARTED, so the host still gates on it.
+    if (contact_events.swing_scheduled_before_slc_started[leg_idx]) {
+      RCLCPP_ERROR_EXPRESSION(this->get_logger(),
+                              feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED,
+                              "Controll loop reached Swing phase for foot [%d], but SLC is still in stance",
+                              leg_idx);
+      RCLCPP_WARN_EXPRESSION(this->get_logger(),
+                             feet_swing_states_temp[leg_idx] == SwingLegControllerInterface::NOT_STARTED,
+                             "Controll loop reached Swing phase for foot [%d], but SLC has not yet started",
+                             leg_idx);
     }
   }
 
@@ -1247,6 +1048,14 @@ void MITController::ControlLoopCallback() {
   wbc_->UpdateFootContact(gait);
   wbc_->UpdateWrenches(wrenches);
 
+  // Which getter serves this cycle follows leg_control_mode_ alone. Before #13 (M3.2) the WBC's
+  // command type was a compile-time property (a std::conditional typedef over USE_WBC), so this had
+  // to be an `if constexpr` inside a generic lambda to keep the incompatible branch from being
+  // compiled at all — and a leg_control_mode_ the build could not serve was a per-cycle logged
+  // error. Both are gone: the interface carries both getters, and the loaded plugin's
+  // SupportedCommandMode() is checked against leg_control_mode_ once at bring-up, so reaching this
+  // switch at all means the pairing is already known good. The cost is unchanged — one virtual call
+  // through the same stage pointer, into the same solver.
   static WBCReturn wbc_return;
   switch (leg_control_mode_) {
     case CARTESIAN_JOINT_CONTROL:
@@ -1254,19 +1063,19 @@ void MITController::ControlLoopCallback() {
     case CARTESIAN_STIFFNESS_CONTROL: {
       leg_cmd_.header.stamp = this->get_clock()->now();
       CartesianCommands commands;
-      wbc_return = reinterpret_cast<WBCInterface<CartesianCommands> *>(wbc_.get())->GetJointCommand(commands);
+      wbc_return = wbc_->GetCartesianCommand(commands);
       assign(commands.position, leg_cmd_.ee_pos);
       assign(commands.velocity, leg_cmd_.ee_vel);
       assign(commands.force, leg_cmd_.ee_force);
       leg_cmd_publisher_->publish(leg_cmd_);
-    } break;
+      break;
+    }
     case JOINT_TORQUE_CONTROL:
       [[fallthrough]];
     case JOINT_CONTROL: {
       leg_joint_cmd_.header.stamp = this->get_clock()->now();
       JointTorqueVelocityPositionCommands commands;
-      wbc_return =
-          reinterpret_cast<WBCInterface<JointTorqueVelocityPositionCommands> *>(wbc_.get())->GetJointCommand(commands);
+      wbc_return = wbc_->GetJointCommand(commands);
       assign(commands.velocity, leg_joint_cmd_.velocity);
       assign(commands.position, leg_joint_cmd_.position);
       assign(commands.torque, leg_joint_cmd_.effort);
@@ -1375,7 +1184,19 @@ void MITController::HartbeatCallback() {
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<MITController>("mit_controller_node");
+  std::shared_ptr<MITController> node;
+  // Stage selection and stage initialisation fail by throwing (StageLoadError /
+  // StageInitError, stage_loading.md §2). Both are fatal — there is no fallback
+  // stage — so the only thing left to do is put the message where a human bringing
+  // the robot up will read it, and exit non-zero instead of unwinding through an
+  // uncaught exception whose message the terminate handler mangles.
+  try {
+    node = std::make_shared<MITController>("mit_controller_node");
+  } catch (const std::exception &error) {
+    RCLCPP_FATAL(rclcpp::get_logger("mit_controller_node"), "Could not start the controller: %s", error.what());
+    rclcpp::shutdown();
+    return 1;
+  }
   rclcpp::ExecutorOptions exopt;
   rclcpp::executors::MultiThreadedExecutor executor(exopt, 4);
   executor.add_node(node);

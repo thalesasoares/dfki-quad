@@ -48,6 +48,11 @@ mit_controller_node: ##### REAL SYSTEM
     fix_standing_position: true
     maximum_swing_leg_progress_to_update_target: 0.5
     wbc:
+      # whole body control. wbc_arc_opt produces joint commands (needs leg_control_mode 0 or 1);
+      # inverse_dynamics produces cartesian commands (needs leg_control_mode 2 or 3). Pinned since
+      # #13 (M3.2); this is what a ULab build already derived from its build flavour, now stated
+      # in the config so any build loads the same stage.
+      type: inverse_dynamics
       inverse_dynamics:
         foot_position_based_on_target_height: false
         foot_position_based_on_target_orientation: false

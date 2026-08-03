@@ -25,7 +25,7 @@
 #define COM_TASK
 #define FEET_POS_TASK
 
-class WBCArcOPT : public WBCInterface<JointTorqueVelocityPositionCommands> {
+class WBCArcOPT : public WBCInterface {
  private:
   std::unique_ptr<StateInterface> quad_state_;  // TODO: maybe remove!
   std::array<std::string, ModelInterface::N_LEGS> feet_names_;
@@ -86,5 +86,17 @@ class WBCArcOPT : public WBCInterface<JointTorqueVelocityPositionCommands> {
                     const Eigen::Vector3d& position,
                     const Eigen::Vector3d& lin_vel,
                     const Eigen::Vector3d& ang_vel) override;
+  // The command family this controller produces. A class constant as well as the virtual, so the
+  // stock plugin adapter can report it on a default-constructed plugin (before its Init has built a
+  // WBCArcOPT) without the two answers being able to drift apart.
+  static constexpr WBCCommandMode kCommandMode = WBCCommandMode::kJoint;
+  WBCCommandMode SupportedCommandMode() const override { return kCommandMode; }
   WBCReturn GetJointCommand(JointTorqueVelocityPositionCommands& joint_command) override;
+  // Not this controller's command family — the host validates the mode at bring-up and never
+  // calls this (wbc_interface.hpp).
+  WBCReturn GetCartesianCommand(CartesianCommands& cartesian_command) override {
+    (void)cartesian_command;
+    return {false, 0.0, 0.0};
+  }
+  bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) override;
 };

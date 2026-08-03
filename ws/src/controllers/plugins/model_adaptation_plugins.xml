@@ -1,0 +1,29 @@
+<!--
+  Model-adaptation stage plugins.
+
+  base_class_type: StagePlugin<ModelAdaptationInterface>
+    (mit_controller/stage_plugin.hpp + model_adaptation/model_adaptation_interface.hpp)
+
+  Stock wrappers filled in by M2.3 (issue #8): kf_adaptation, rls_adaptation, in
+  src/plugins/model_adaptation_plugins.cpp, built into libmodel_adaptation_plugins.
+  These were the two ma_mode branches in the host (0/default = KF, 1 = RLS); the
+  branch is now a plugin selection.
+
+  The '<' in base_class_type is XML-escaped as &lt;/&gt; (stage_loading.md §5).
+  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
+  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+-->
+<class_libraries>
+  <library path="libmodel_adaptation_plugins">
+    <class name="kf_adaptation"
+           type="stock_plugins::KfAdaptationPlugin"
+           base_class_type="StagePlugin&lt;ModelAdaptationInterface&gt;">
+      <description>Kalman-filter mass/CoM model adaptation (KFModelAdaptation).</description>
+    </class>
+    <class name="rls_adaptation"
+           type="stock_plugins::RlsAdaptationPlugin"
+           base_class_type="StagePlugin&lt;ModelAdaptationInterface&gt;">
+      <description>Recursive-least-squares mass/CoM model adaptation (LeastSquaresModelAdaptation).</description>
+    </class>
+  </library>
+</class_libraries>

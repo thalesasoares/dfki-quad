@@ -1,12 +1,15 @@
 #pragma once
 
+#include <rclcpp/parameter_value.hpp>
+
+#include <string>
+
 #include "common/model_interface.hpp"
 #include "common/quaternion_operations.hpp"
 #include "common/state_interface.hpp"
 #include "gait_sequence.hpp"
 #include "gait_sequencer_types.hpp"
 #include "interfaces/msg/gait_state.hpp"
-#include "potato_sim/potato_model.hpp"
 #include "rclcpp/time.hpp"
 #include "target.hpp"
 
@@ -52,6 +55,17 @@ class GaitSequencerInterface {
   virtual void GetGaitState(interfaces::msg::GaitState& state) = 0;
   /** Identifies which gait sequencer implementation this is. */
   virtual GS_Type GetType() const = 0;
+  /**
+   * Applies a runtime parameter to this stage.
+   * Called from the host parameter-event callback with the stage's mutex (gait_sequencer_lock_)
+   * held, never from the control loops. An implementation that recognises no runtime parameters
+   * returns false; the host then falls back to reloading the gait sequencer from scratch.
+   *
+   * @param name the full ROS parameter name (e.g. "adaptive_gait_sequencer.gait.swing_time")
+   * @param value the new parameter value
+   * @return true if the key was recognised and applied, false otherwise
+   */
+  virtual bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) = 0;
 
   virtual ~GaitSequencerInterface() = default;
 };

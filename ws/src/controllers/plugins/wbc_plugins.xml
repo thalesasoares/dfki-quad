@@ -1,0 +1,43 @@
+<!--
+  Whole-body-controller stage plugins (issue #6, M2.1; reworked by issue #13, M3.2).
+
+  base_class_type: StagePlugin<WBCInterface>
+    (mit_controller/stage_plugin.hpp + mit_controller/wbc_interface.hpp
+     + mit_controller/joint_commands.hpp)
+
+  Both stock WBCs declare that one base. Until M3.2 they could not: WBCInterface was
+  a class template keyed on the command struct (gap G8), so wbc_arc_opt registered
+  under the JointTorqueVelocityPositionCommands instantiation and inverse_dynamics
+  under the CartesianCommands one, and picking between them meant rebuilding the
+  host for the matching instantiation. #13 de-templated the interface — the command
+  family is now reported at runtime by WBCCommandMode SupportedCommandMode() — so
+  the two collapse into one base and `wbc.type` selects either without a rebuild.
+  This file was the only stage XML the collapse touched, as
+  doc/modularity/plugin_discovery.md predicted.
+
+  Stock wrappers (M2.3, issue #8): wbc_arc_opt and inverse_dynamics, in
+  src/plugins/wbc_plugins.cpp, both built into libwbc_plugins — which has always
+  been built robot-agnostically, so both classes are present in every build.
+
+  The '<' in base_class_type is XML-escaped as &lt;/&gt; (stage_loading.md §5).
+  The `name` (type: key) vocabulary is owned by M2.5 (#10); this file is
+  naming-agnostic per doc/modularity/plugin_lifecycle.md.
+-->
+<class_libraries>
+  <library path="libwbc_plugins">
+    <class name="wbc_arc_opt"
+           type="stock_plugins::WbcArcOptPlugin"
+           base_class_type="StagePlugin&lt;WBCInterface&gt;">
+      <description>ARC-OPT task-space inverse dynamics WBC producing joint torque/velocity/position
+        commands (WBCArcOPT). Reports WBCCommandMode::kJoint, so it needs leg_control_mode 0 or 1;
+        the stock Go2 path.</description>
+    </class>
+    <class name="inverse_dynamics"
+           type="stock_plugins::InverseDynamicsPlugin"
+           base_class_type="StagePlugin&lt;WBCInterface&gt;">
+      <description>Inverse-dynamics WBC producing Cartesian foot commands (InverseDynamics).
+        Reports WBCCommandMode::kCartesian, so it needs leg_control_mode 2 or 3; the ULab/ikin
+        path.</description>
+    </class>
+  </library>
+</class_libraries>

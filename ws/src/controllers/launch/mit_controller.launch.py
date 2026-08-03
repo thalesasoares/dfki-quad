@@ -11,6 +11,86 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+# --- Stage selection at launch (issue #19, M4.4) ------------------------------
+#
+# The controller is a modular pipeline: each stage is a pluginlib class picked by
+# one `<stage>.type` string (doc/modularity/stage_loading.md §4). These two launch
+# arguments make that choice reachable without editing the shipped robot YAML:
+#
+#   <stage>:=<plugin>        one stage, one plugin id, nothing else
+#   stage_overlay:=<file>    a params file layered over the robot config, so a
+#                            swap that also needs the stage's *parameters* stays
+#                            one argument
+#
+# Both are pure parameter plumbing resolved before the node starts; neither adds
+# anything to the control loop. Full story: doc/modularity/stage_overlays.md.
+
+# The six stages, spelled as in stage_selection.hpp. `<key>:=v` sets `<key>.type`.
+STAGE_LAUNCH_KEYS = ("gs", "mpc", "slc", "wbc", "model_adaptation", "contact_logic")
+
+STAGE_OVERLAY_KEY = "stage_overlay"
+# Overlays shipped with the package, resolved by bare filename from here.
+STAGE_OVERLAY_DIR = "overlays"
+
+
+def launch_arg_value(argv, name):
+    """
+    The value of a `name:=value` launch argument, or None if it was not given.
+
+    Repeating an argument is a hard error rather than a last-one-wins: which of
+    two `gs:=` values applies is not something a demo should have to guess.
+    """
+    prefix = name + ":="
+    values = [arg[len(prefix):] for arg in argv if arg.startswith(prefix)]
+    if len(values) > 1:
+        print('Error: launch param "%s" specified more than once: %s' % (name, values))
+        exit(-1)
+    return values[0] if values else None
+
+
+def stage_type_overrides(argv):
+    """
+    `{'<stage>.type': '<plugin>'}` for every stage named on the command line.
+
+    The plugin id is passed through verbatim. Validating it here would mean a
+    second copy of the plugin vocabulary that drifts from the declared classes;
+    the host's StageLoader already refuses an unknown id at bring-up and prints
+    what *is* declared, which is the single source of truth.
+    """
+    overrides = {}
+    for stage in STAGE_LAUNCH_KEYS:
+        plugin = launch_arg_value(argv, stage)
+        if plugin is None:
+            continue
+        if not plugin:
+            print('Error: launch param "%s" needs a plugin name, e.g. %s:=simple_gait.'
+                  % (stage, stage))
+            exit(-1)
+        overrides[stage + ".type"] = plugin
+    return [overrides] if overrides else []
+
+
+def stage_overlay_files(argv, pkg_controllers):
+    """
+    The resolved `stage_overlay:=<file>` params file, as a one-element list.
+
+    Accepts a path to any file, or the bare name of an overlay shipped in
+    `config/overlays/` so the common case is short. An overlay that resolves to
+    neither aborts the launch naming both places it looked: silently starting the
+    stock stack because a path was misspelled is the failure mode this whole
+    layer exists to avoid.
+    """
+    overlay = launch_arg_value(argv, STAGE_OVERLAY_KEY)
+    if overlay is None:
+        return []
+    shipped = os.path.join(pkg_controllers, "config", STAGE_OVERLAY_DIR, overlay)
+    for candidate in (overlay, shipped):
+        if os.path.isfile(candidate):
+            return [candidate]
+    print('Error: stage_overlay "%s" is not a file. Looked for:\n  %s\n  %s'
+          % (overlay, overlay, shipped))
+    exit(-1)
+
 
 def safe_start():
     rclpy.init()
@@ -70,6 +150,19 @@ def safe_start():
 
 
 def generate_launch_description():
+    pkg_controllers = get_package_share_directory("controllers")
+
+    # Resolved before safe_start(): a mistyped stage argument should abort now,
+    # not after three seconds of standing on a robot that is about to be told to
+    # walk. Stage selection, weakest first — launch_ros emits one --params-file /
+    # -p per entry of `parameters` in list order and rcl lets the later
+    # assignment win, so this is the precedence chain:
+    #   robot config < common config < stage_overlay file < <stage>:= argument
+    # An explicit one-stage argument therefore beats an overlay that also names
+    # that stage, and only that stage — the rest of the overlay still applies.
+    stage_overlay_params = stage_overlay_files(sys.argv[4:], pkg_controllers)
+    stage_type_params = stage_type_overrides(sys.argv[4:])
+
     if not "safe_start:=false" in sys.argv[4:]:
         safe_start()
     if "sim:=ulab" in sys.argv[4:]:
@@ -136,7 +229,6 @@ def generate_launch_description():
     # elif "mpc_condensed_size:=FULL" in sys.argv[4:]:
     #     mpc_condensed_size_param = ['-p', 'mpc_condensed_size:=1']
 
-    pkg_controllers = get_package_share_directory("controllers")
     pkg_common = get_package_share_directory("common")
     controller_config_path = os.path.join(pkg_controllers, "config", config_file)
     common_config_path = os.path.join(pkg_common, "config", common_config_file)
@@ -171,7 +263,9 @@ def generate_launch_description():
             package='controllers',  # Replace with the actual package name
             executable='mitcontrollernode',  # Replace with the executable name
             name='mit_controller_node',
-            parameters=[controller_config_path, common_config_path, {"use_sim_time": use_sim_time}],
+            parameters=[controller_config_path, common_config_path]
+                       + stage_overlay_params + stage_type_params
+                       + [{"use_sim_time": use_sim_time}],
             output='screen',
             arguments=['--ros-args', '--log-level', ["mit_controller_node:=",
                                                      "info"]] + mpc_solver_param + mpc_condensed_size_param + mpc_hpipm_mode_param

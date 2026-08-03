@@ -1,7 +1,14 @@
 #pragma once
+#include <rclcpp/parameter_value.hpp>
+
+#include <string>
+
 #include "common/model_interface.hpp"
 #include "common/state_interface.hpp"
-#include "gait_sequence.hpp"
+// Qualified so the header resolves against the exported `include/` root once
+// installed to include/model_adaptation/, not just via the in-tree
+// include_directories(include/mit_controller) (issue #6, M2.1).
+#include "mit_controller/gait_sequence.hpp"
 
 class ModelAdaptationInterface {
  protected:
@@ -40,6 +47,16 @@ class ModelAdaptationInterface {
   virtual Eigen::Vector<double, 6> GetTotalForceTorque() const = 0;
   /** Singular values of the estimation problem, for diagnostics. Must be side effect free. */
   virtual Eigen::Vector<double, NUM_PARAMS> GetSV() const = 0;
+  /**
+   * Applies a runtime parameter to this stage.
+   * Called from the host parameter-event callback, never from the control loops. An implementation
+   * that recognises no runtime parameters returns false (the host logs a warning).
+   *
+   * @param name the full ROS parameter name
+   * @param value the new parameter value
+   * @return true if the key was recognised and applied, false otherwise
+   */
+  virtual bool SetParameter(const std::string& name, const rclcpp::ParameterValue& value) = 0;
 
   virtual ~ModelAdaptationInterface() = default;
 };

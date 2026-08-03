@@ -117,7 +117,8 @@ void MPC::GetUBounds(const std::array<bool, NUM_FEET> &contact,
 }
 
 MPC::MPC(double alpha,
-         const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights,
+         const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights_stand,
+         const Eigen::Matrix<double, STATE_SIZE - 1, 1> &state_weights_move,
          double mu,
          double fmin,
          double fmax,
@@ -135,6 +136,9 @@ MPC::MPC(double alpha,
       fmin_(fmin),
       fmax_(fmax),
       mu_(mu),
+      state_weights_stand_(state_weights_stand),
+      state_weights_move_(state_weights_move),
+      active_weights_mode_(GaitSequence::KEEP),
       stateOnes_(stateVecT::Ones()),
       inputOnes_(inputVecT::Ones()),
       stateIdentity_(AMatrixT::Identity()),
@@ -163,9 +167,10 @@ MPC::MPC(double alpha,
   // Constants
   MPC::GetC(mu_, D_);
   MPC::GetCbounds(fmin_, fmax_, Clb_, Cub_);
+  // The MPC starts in KEEP mode (active_weights_mode_), so it is initialised with the stand weights.
   Eigen::Matrix<double, STATE_SIZE, 1> state_weights_with_g;
   state_weights_with_g.setConstant(0);
-  state_weights_with_g.block<STATE_SIZE - 1, 1>(0, 0) = state_weights;
+  state_weights_with_g.block<STATE_SIZE - 1, 1>(0, 0) = state_weights_stand_;
   Q_ = state_weights_with_g.asDiagonal();
   R_ = RMatrixT::Identity() * alpha;
 
@@ -321,7 +326,24 @@ void MPC::UpdateModel(const ModelInterface &quad_model) {
   model_update_ = true;
 }
 
-void MPC::UpdateGaitSequence(const GaitSequence &gait_sequence) { gait_sequence_ = gait_sequence; }
+void MPC::UpdateGaitSequence(const GaitSequence &gait_sequence) {
+  gait_sequence_ = gait_sequence;
+  // The cost weights depend on whether the robot is asked to keep its pose or to move. This switch
+  // used to live in the host (issue #2, gap G1); the MPC now derives it from the sequence_mode of
+  // the gait sequence it already receives. SetStateWeights only re-uploads to the solver on an
+  // actual mode change, so the steady-state 100 Hz cost is one enum comparison.
+  if (gait_sequence_.sequence_mode != active_weights_mode_) {
+    switch (gait_sequence_.sequence_mode) {
+      case GaitSequence::KEEP:
+        SetStateWeights(state_weights_stand_);
+        break;
+      case GaitSequence::MOVE:
+        SetStateWeights(state_weights_move_);
+        break;
+    }
+    active_weights_mode_ = gait_sequence_.sequence_mode;
+  }
+}
 
 void MPC::SetStateWeights(const Eigen::Matrix<double, STATE_SIZE - 1, 1> &weights) {
   Q_.diagonal().block<STATE_SIZE - 1, 1>(0, 0) = weights;
@@ -356,6 +378,38 @@ void MPC::SetMu(double mu) {
     ocp_qp_in_set(solver_config_, qp_in_, k, const_cast<char *>("D"), D_.data());
   }
   std::cout << "Updated mu to: " << mu_ << std::endl;
+}
+
+bool MPC::SetParameter(const std::string &name, const rclcpp::ParameterValue &value) {
+  if (name == "mpc_state_weights_stand") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY) return false;
+    const auto &weights = value.get<std::vector<double>>();
+    if (weights.size() != STATE_SIZE - 1) return false;
+    state_weights_stand_ = Eigen::Map<const Eigen::Matrix<double, STATE_SIZE - 1, 1>>(weights.data());
+    // Only push to the solver when the stand weights are the active set (preserves host behaviour).
+    if (active_weights_mode_ == GaitSequence::KEEP) SetStateWeights(state_weights_stand_);
+    return true;
+  } else if (name == "mpc_state_weights_move") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY) return false;
+    const auto &weights = value.get<std::vector<double>>();
+    if (weights.size() != STATE_SIZE - 1) return false;
+    state_weights_move_ = Eigen::Map<const Eigen::Matrix<double, STATE_SIZE - 1, 1>>(weights.data());
+    if (active_weights_mode_ == GaitSequence::MOVE) SetStateWeights(state_weights_move_);
+    return true;
+  } else if (name == "mpc_alpha") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return false;
+    SetInputWeights(value.get<double>());
+    return true;
+  } else if (name == "mpc_fmax") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return false;
+    SetFmax(value.get<double>());
+    return true;
+  } else if (name == "mpc_mu") {
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return false;
+    SetMu(value.get<double>());
+    return true;
+  }
+  return false;
 }
 
 void MPC::GetWrenchSequence(WrenchSequence &wrench_sequence,
